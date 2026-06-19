@@ -14,6 +14,12 @@ async def create_promo_code(code: str, max_uses: int, granted_days: int):
         print("Error: DATABASE_URL not found in environment.")
         return
 
+    # Automatically adapt the URL for asyncpg if running in environments like Railway/Heroku
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
     engine = create_async_engine(db_url)
     AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
