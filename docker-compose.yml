@@ -4,13 +4,14 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
+      - .:/app:z
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/cvstudio
       - CLERK_API_KEY=${CLERK_API_KEY}
       - STRIPE_API_KEY=${STRIPE_API_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - WATCHFILES_FORCE_POLLING=true
     depends_on:
       db:
         condition: service_healthy

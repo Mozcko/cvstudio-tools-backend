@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from src.core.config import settings
-from src.api.routers import cv, webhooks, ai, billing, users
+from src.api.routers import cv, webhooks, ai, billing, users, promo as promo_router
 from src.db.database import engine, Base
 from src.models import user, cv as cv_model, promo # Import models to register them with Base
 
@@ -42,6 +42,7 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")  # webhooks.router already has prefix="/webhooks"
 app.include_router(ai.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(promo_router.router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():
