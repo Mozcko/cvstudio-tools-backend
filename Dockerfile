@@ -22,5 +22,5 @@ ENV PYTHONPATH=/app
 # Expose port
 EXPOSE 8000
 
-# Start command
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Applies migrations, then starts the server on $PORT (default 8000)
+CMD ["sh", "scripts/start.sh"]

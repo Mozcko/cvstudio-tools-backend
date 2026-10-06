@@ -7,7 +7,7 @@ from alembic import context
 # Import your settings and models
 from src.core.config import settings
 from src.db.database import Base
-from src.models import user, cv, promo # Ensure all models are imported
+import src.models  # noqa: F401  (registers every model on Base.metadata)
 
 # this is the Alembic Config object
 config = context.config
