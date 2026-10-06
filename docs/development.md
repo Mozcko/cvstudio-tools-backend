@@ -142,7 +142,8 @@ Patterns worth copying (`test/conftest.py`):
   `stripe.Webhook.construct_event` monkeypatched in `test_billing_promo.py`, a local RSA key in
   `test_security.py`, real Svix signing in `test_webhooks.py`.
 
-This repo has no CI workflow of its own yet.
+CI (`.github/workflows/ci.yml`) runs the suite against a PostgreSQL service, then applies the
+migrations to an empty database and runs `alembic check`.
 
 ## Admin scripts
 

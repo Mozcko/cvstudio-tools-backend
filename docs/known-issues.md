@@ -75,9 +75,10 @@ There is no SQLite fallback (the models use `JSONB`/`UUID`). Database-backed tes
 when no database is reachable, which can make a run look green. And they drop every table in the
 database they are pointed at.
 
-### 14. No CI workflow in this repo — Read
-The frontend repo's workflow has a backend job written for a different layout. Nothing runs these
-tests automatically.
+### 14. CI covers tests and migrations only — Read
+`.github/workflows/ci.yml` runs `pytest` against a PostgreSQL service and then
+`alembic upgrade head` + `alembic check` on an empty database. There is no linting or type
+checking.
 
 ### 15. No connection-pool or timeout tuning — Read
 The SQLAlchemy engine and the OpenAI client use library defaults; a slow provider call holds a
