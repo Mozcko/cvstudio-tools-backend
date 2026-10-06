@@ -8,6 +8,6 @@ pydantic-settings==2.3.4
 PyJWT[crypto]==2.15.1
 svix==1.24.0
 stripe==10.1.0
-openai==1.109.1
+openai==3.24.0
 # Used by the OpenAI SDK (and the tests). Pinned because SDK and httpx versions must match.
 httpx==0.28.1
