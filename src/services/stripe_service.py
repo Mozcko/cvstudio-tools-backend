@@ -1,10 +1,90 @@
+import logging
+from datetime import datetime, timezone
+
 import stripe
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from src.core.config import settings
+from src.models.payment import Payment
 from src.models.user import User
-from datetime import datetime, timedelta, timezone
+from src.services.pro import grant_pro, revoke_grant
+
+logger = logging.getLogger(__name__)
+
+# plan_duration metadata -> days of Pro (None = lifetime)
+PLAN_DAYS = {"7": 7, "30": 30, "lifetime": None}
+
+async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
+    if session.get("payment_status") != "paid":
+        # Delayed payment methods complete later via checkout.session.async_payment_succeeded
+        return
+
+    session_id = session.get("id")
+    metadata = session.get("metadata") or {}
+    # Extract Clerk User ID from client_reference_id or metadata
+    clerk_user_id = session.get("client_reference_id") or metadata.get("user_id")
+    plan_duration = metadata.get("plan_duration")
+
+    if not session_id or not clerk_user_id or plan_duration not in PLAN_DAYS:
+        logger.warning("Ignoring checkout session %s: missing user or unknown plan", session_id)
+        return
+
+    # Stripe retries deliveries: a session is only ever applied once
+    existing = await db.execute(select(Payment).where(Payment.session_id == session_id))
+    if existing.scalar_one_or_none():
+        return
+
+    days = PLAN_DAYS[plan_duration]
+
+    result = await db.execute(select(User).where(User.id == clerk_user_id).with_for_update())
+    user = result.scalar_one_or_none()
+    if not user:
+        # If user doesn't exist in our DB yet, we create it
+        user = User(id=clerk_user_id, is_pro=False)
+        db.add(user)
+
+    grant_pro(user, days)
+    db.add(Payment(
+        session_id=session_id,
+        user_id=clerk_user_id,
+        plan=plan_duration,
+        payment_intent=session.get("payment_intent"),
+        granted_days=days,
+    ))
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        # A concurrent delivery of the same event won the race
+        await db.rollback()
+
+async def _handle_charge_refunded(charge: dict, db: AsyncSession) -> None:
+    if not charge.get("refunded"):
+        # Partial refund: access is kept
+        return
+
+    payment_intent = charge.get("payment_intent")
+    if not payment_intent:
+        return
+
+    result = await db.execute(
+        select(Payment)
+        .where(Payment.payment_intent == payment_intent, Payment.refunded_at.is_(None))
+        .with_for_update()
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        return
+
+    user_result = await db.execute(select(User).where(User.id == payment.user_id).with_for_update())
+    user = user_result.scalar_one_or_none()
+    if user:
+        revoke_grant(user, payment.granted_days)
+
+    payment.refunded_at = datetime.now(timezone.utc)
+    await db.commit()
 
 async def process_webhook_event(payload: bytes, sig_header: str, db: AsyncSession):
     if not settings.STRIPE_WEBHOOK_SECRET:
@@ -20,35 +100,16 @@ async def process_webhook_event(payload: bytes, sig_header: str, db: AsyncSessio
     except ValueError:
         # Invalid payload
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
+    except stripe.SignatureVerificationError:
         # Invalid signature
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        
-        # Extract Clerk User ID from client_reference_id or metadata
-        clerk_user_id = session.get("client_reference_id") or session.get("metadata", {}).get("user_id")
-        plan_duration = session.get("metadata", {}).get("plan_duration")
-        
-        if clerk_user_id:
-            # Calculate expiration date
-            expires_at = None
-            if plan_duration in ["7", "30"]:
-                expires_at = datetime.now(timezone.utc) + timedelta(days=int(plan_duration))
-            
-            # Update user's is_pro status and expiration
-            result = await db.execute(select(User).where(User.id == clerk_user_id))
-            user = result.scalar_one_or_none()
-            
-            if user:
-                user.is_pro = True
-                user.pro_expires_at = expires_at
-                await db.commit()
-            else:
-                # If user doesn't exist in our DB yet, we create it
-                new_user = User(id=clerk_user_id, is_pro=True, pro_expires_at=expires_at)
-                db.add(new_user)
-                await db.commit()
-    
+    event_type = event["type"]
+    obj = event["data"]["object"]
+
+    if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        await _handle_checkout_paid(obj, db)
+    elif event_type == "charge.refunded":
+        await _handle_charge_refunded(obj, db)
+
     return {"status": "success"}

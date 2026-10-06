@@ -1,129 +1,113 @@
 # Known Issues and Gotchas
 
-Found while reading the code to write this knowledge base (commit `e0f98e4`). Nothing here has been
-fixed. Confidence labels:
+What is still open after the `fix/known-issues` round. Confidence labels:
 
 - **Read** — follows directly from the code.
-- **Ran** — reproduced by executing something.
-- **Likely** — follows from the code but depends on runtime behaviour that was not exercised. The
-  service was not started and the test suite was not run while writing this (the local Python had
-  no `asyncpg`).
+- **Ran** — verified by executing it (the test suite and the migrations were run against
+  PostgreSQL in containers).
+- **Not exercised** — implemented and unit/integration tested with fakes, but not run against the
+  real external service.
 
 Delete entries as they are resolved.
 
-## Security
+## Needs a manual pass before production
 
-Security findings (items 1–6) are tracked privately, not in this public repository.
-Numbering below starts at 7 to keep existing references stable.
+### 1. Real Clerk, Stripe and OpenAI were not exercised — Not exercised
+Token verification is tested with a locally generated key, Clerk webhooks with real Svix signing
+but a test secret, Stripe webhooks with the signature check stubbed, and AI with a fake client.
+Before relying on this in production:
 
-## Bugs
+- sign in through the real frontend and confirm `/users/me` answers `200` (this proves
+  `CLERK_ISSUER` and the `azp` origin are right — a wrong value shows up as `401` on every request);
+- send a test event from the Clerk dashboard and from `stripe trigger checkout.session.completed`;
+- run each AI feature once with a real key.
 
-### 7. Mode detection reads the job description — Read
-`improve_text` looks for `translate` / `optimize` anywhere in the lower-cased `context`, which
-includes the pasted job description, and checks translation first (`improvement.py:14-15, 32`). An
-**optimize** request whose job description contains the word "translate" is handled as a
-translation. Likewise `lang: en` etc. are matched anywhere in the string. Fix: accept `action`,
-`lang` and `job_description` as separate request fields.
+### 2. Deploying needs new configuration first — Read
+`CLERK_ISSUER` is required and `CLERK_WEBHOOK_SECRET` is needed for the Clerk webhook. Without the
+first the service does not start; without the second the webhook answers `500`. See the checklist
+in the frontend repo's `PROD-ENV-CHECKLIST.md`.
 
-### 8. Non-Pro callers get `500`, not `403` — Ran
-`check_pro_status` raises `HTTPException(403)` inside each AI handler's `try`, and the
-`except Exception` re-raises it as `500` with detail `"403: This feature requires a Pro
-subscription."` (confirmed: `str(HTTPException(403, "x"))` is `"403: x"`). Clients cannot
-distinguish "not Pro" from a server failure. Fix: check Pro before the `try`, or
-`except HTTPException: raise` first.
+### 3. Existing Stripe webhook registration may need updating — Read
+The endpoint is `/api/v1/webhooks/stripe`, and it now also consumes
+`checkout.session.async_payment_succeeded` and `charge.refunded`. Add those events to the
+registered endpoint or refunds will not revoke access.
 
-### 9. `/users/me` does not apply Pro expiry — Read
-It depends on `get_current_user_id` (`routers/users.py:12`), bypassing the expiry check in
-`get_current_user`. After a pass runs out, `/users/me` keeps answering `is_pro: true` until the
-user happens to call another authenticated endpoint. The frontend uses `/users/me` to decide what
-to show, so an expired user can still see Pro UI; the AI endpoints themselves do enforce expiry.
+## Open limitations
 
-### 10. A Stripe purchase overwrites remaining Pro time — Read
-`stripe_service.py:46` sets `pro_expires_at` from "now", ignoring any current value. Buying 7 days
-with 20 days left shortens access; buying a timed pass as a lifetime user ends lifetime. The
-frontend disables purchase buttons for Pro users, but that is the only guard. `/billing/redeem` has
-the same behaviour; `/promo/redeem` extends correctly.
+### 4. Partial refunds and disputes do nothing — Read
+Only a full refund (`charge.refunded` with `refunded: true`) revokes a grant. Partial refunds,
+disputes and chargebacks are ignored.
 
-### 11. Promo codes can be redeemed repeatedly by the same user — Read
-There is no redemption record, only a counter. A code with `max_uses > 1` can be redeemed by one
-account until the counter runs out, stacking days each time.
+### 5. Payments made before this version have no `payments` row — Read
+Refunding one of those will not revoke access automatically; adjust the user by hand.
 
-### 12. Stripe webhook does not check payment state or duplicates — Read
-`checkout.session.completed` is acted on without looking at `payment_status`, and events are not
-de-duplicated. Refunds and disputes are ignored, so a refunded user stays Pro.
+### 6. Promo redemptions before this version are not recorded — Read
+The one-per-user rule starts counting now: someone who redeemed a multi-use code earlier can redeem
+it once more.
 
-### 13. `upgrade_user.py --email` cannot work — Read
-`users.email` is never written by the application, so the lookup finds nothing; the script then
-tries to insert a user with `id=None`. Use `--user-id`. The script also leaves `pro_expires_at`
-unchanged.
+### 7. `ai_requests` grows without bound — Read
+One row per AI call and nothing prunes it. The rate limiter only reads the last 24 hours; a
+periodic `DELETE … WHERE created_at < now() - interval '90 days'` would be enough.
 
-### 14. CV list has no ordering — Read
-`GET /cvs/` returns rows in database order, so the dashboard order is not guaranteed to be
-"most recently updated first".
+### 8. Rate limiting counts attempts, not successes — Read
+A call is recorded before the provider is contacted, so provider failures use up quota. This is
+intentional (it bounds cost under failure) but can surprise a user during an outage.
 
-## Schema and migrations
+### 9. AI output is not schema-validated — Read
+`/ai/ats` returns whatever JSON object the model produced, and `/ai/rewrite` only guarantees an
+object with the contact fields restored. The frontend merges defensively; another client would
+need its own checks.
 
-### 15. Alembic history is not usable — Read
-The first revision is empty and there is no baseline; the schema is really produced by
-`create_all` at startup. `alembic upgrade head` fails on both an empty database and a freshly
-app-created one. Details and a workaround in
-[development.md](./development.md#database-and-migrations). Fix: generate a baseline revision
-that creates all three tables, and stop calling `create_all` in production.
+### 10. Authentication depends on reaching Clerk — Read
+Verification needs Clerk's key set. Keys are cached, but a cold process that cannot reach Clerk
+answers `503` to every authenticated request until it can.
 
-### 16. `create_all` hides missing migrations — Read
-A new **column** on an existing table works on a fresh local database and fails in production with
-`column does not exist`, because `create_all` never alters tables.
+### 11. No pagination on `GET /cvs/` — Read
+Fine for the free tier (3 CVs); a Pro user with hundreds gets them all, content included, in one
+response.
 
-### 17. No `theme` anywhere in the CV model — Read
-The frontend's API types expect a `theme` on listed CVs, but there is no column and no schema
-field. The value is always absent, so the frontend's dashboard always falls back to its first theme.
+### 12. Expiry is lazy — Read
+A user who never comes back keeps `is_pro = true` in the table after their pass ends. Any report
+that counts Pro users must also check `pro_expires_at`.
 
-### 18. Deleting a user depends on manual ordering — Read
-`cvs.user_id` has no `ON DELETE CASCADE`; the Clerk webhook deletes CVs first by hand. Any other
-code path deleting a user will hit the foreign key.
+### 13. Tests need PostgreSQL and wipe it — Read
+There is no SQLite fallback (the models use `JSONB`/`UUID`). Database-backed tests are *skipped*
+when no database is reachable, which can make a run look green. And they drop every table in the
+database they are pointed at.
 
-## Operations
+### 14. No CI workflow in this repo — Read
+The frontend repo's workflow has a backend job written for a different layout. Nothing runs these
+tests automatically.
 
-### 19. Production image runs with `--reload` on a fixed port — Read / Likely impact
-`Dockerfile` `CMD` is the development command. Unless the platform start command overrides it,
-production runs a file watcher and listens only on 8000.
+### 15. No connection-pool or timeout tuning — Read
+The SQLAlchemy engine and the OpenAI client use library defaults; a slow provider call holds a
+request (and its database session) for as long as the SDK allows.
 
-### 20. SQL echo and debug prints are always on — Read
-`create_async_engine(..., echo=True)` logs every statement — including CV JSON bound as parameters
-— and the AI path prints the full `context` (the job description) on every call. Logs therefore
-contain user content.
-
-### 21. Deployment checklist is out of date — Read
-`PROD-ENV-CHECKLIST.md` in the frontend repo gives the Stripe webhook path as
-`/api/v1/billing/webhooks` (actual: `/api/v1/webhooks/stripe`) and the health check as
-`/api/v1/health` (actual: `/health`). A webhook registered at the documented path would 404 and no
-payment would ever grant Pro.
-
-### 22. Synchronous Stripe call in an async handler — Read
-`stripe.checkout.Session.create` blocks the event loop for the duration of the HTTP call.
-
-## Stale or unused
+## Stale or to remove later
 
 | Item | Status |
 | :--- | :--- |
-| `CLERK_API_KEY` setting | Never read |
-| DeepSeek client and settings | Built, never selected; the frontend still says "Powered by Deepseek" |
-| `src/services/ai/translation.py` | Not imported |
-| `POST /billing/redeem` | Superseded by `/promo/redeem`; not called by the frontend |
-| `psycopg2-binary`, `python-multipart` | Installed, not used |
-| `testDB.py`, `test_get_cv.py` | Debug scripts in the repo root, one with a hardcoded CV id |
-| Root `__init__.py` | Empty; makes the repo root look like a package |
-| `README.md` licence section | Placeholder text |
-| Second `get_db` in `src/db/database.py` | Duplicate of the one in `api/dependencies.py` |
+| `POST /ai/improve` | Deprecated shim for clients that predate `/ai/rewrite`; delete once the new frontend is deployed everywhere |
+| `README.md` licence section | Placeholder text; setup section predates `CLERK_ISSUER` — use [development.md](./development.md) |
+| `GEMINI.md` | Describes the old startup behaviour (tables created automatically) |
+| Guards in the first two migrations | Needed only while pre-Alembic databases exist |
 
-## Mismatches with the frontend
+## Fixed in the `fix/known-issues` round
 
-| Frontend assumes | Backend does |
+For reference when reading old notes or commits.
+
+| Area | Now |
 | :--- | :--- |
-| It chooses the CV id (`createCV` sends `id`) | Ignores it and generates a UUID; the response id is authoritative (the frontend does use it) |
-| `getCVs` items include `theme` | No such field |
-| `content` might arrive as a JSON string | Always a JSON object |
-| Stale CV id on save → `404` → create a new CV | `404` only if the row is gone; another user's CV gives `403`, a malformed id `422` — neither triggers the fallback |
-| A fourth CV can be created from the editor or via "AI: create a copy" | `403`; the frontend shows a generic save error |
-| `generateCoverLetter` result is used as a string | Returns `{ "cover_letter": "…" }` — the frontend passes the object to its modal |
-| Promo redemption UI | Exists only on the frontend's `main` branch, not on `master` |
+| Authentication and webhooks | Clerk tokens and Clerk/Stripe webhooks are cryptographically verified; required settings fail closed |
+| AI privacy | Contact details are masked for every AI feature and restored in rewritten CVs |
+| AI prompts | Action and language are validated fields; job descriptions travel as tagged data in the user message |
+| AI errors | Non-Pro is `403`, rate limit `429`, provider trouble a generic `502`; internals are logged, not returned |
+| AI cost | Per-user hourly and daily limits; request size caps |
+| `/users/me` | Applies Pro expiry; returns only `id`, `is_pro`, `pro_expires_at` |
+| Purchases | Extend remaining time instead of overwriting it; applied once per Checkout session; full refunds revoke |
+| Promo codes | One redemption per user; single endpoint (`/billing/redeem` removed) |
+| CVs | `theme` stored per CV; list is newest first; deleting a user cascades |
+| Schema | Alembic migrations are complete and run at startup; no `create_all` |
+| Operations | Production entrypoint without `--reload`, honours `$PORT`; SQL echo off by default; structured logging |
+| Scripts | `upgrade_user.py` supports `--days` and uses the shared grant logic |
+| Cleanup | DeepSeek wiring, unused modules, debug scripts and unused dependencies removed |

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Dict, Any, Optional
 from datetime import datetime
 from uuid import UUID
@@ -7,6 +7,7 @@ class CVBase(BaseModel):
     title: str
     content: Dict[str, Any]
     language: Optional[str] = 'ES'
+    theme: Optional[str] = Field(default=None, max_length=64)
 
 class CVCreate(CVBase):
     pass
@@ -15,6 +16,7 @@ class CVUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[Dict[str, Any]] = None
     language: Optional[str] = None
+    theme: Optional[str] = Field(default=None, max_length=64)
 
 class CVResponse(CVBase):
     id: UUID

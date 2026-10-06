@@ -5,12 +5,10 @@ services:
       - "8000:8000"
     volumes:
       - .:/app:z
+    # Development: migrate, then run with auto-reload. Other settings come from the mounted .env
+    command: sh -c "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/cvstudio
-      - CLERK_API_KEY=${CLERK_API_KEY}
-      - STRIPE_API_KEY=${STRIPE_API_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - WATCHFILES_FORCE_POLLING=true
     depends_on:
       db:

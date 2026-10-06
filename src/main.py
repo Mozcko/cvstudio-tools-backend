@@ -1,36 +1,26 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 from src.core.config import settings
 from src.api.routers import cv, webhooks, ai, billing, users, promo as promo_router
-from src.db.database import engine, Base
-from src.models import user, cv as cv_model, promo # Import models to register them with Base
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Create tables on startup
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
+logging.basicConfig(
+    level=logging.DEBUG if settings.DEBUG else logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
+# The schema is managed by Alembic (`alembic upgrade head`), not created at startup.
 app = FastAPI(
-    title=settings.PROJECT_NAME, 
-    lifespan=lifespan,
+    title=settings.PROJECT_NAME,
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
     openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None
 )
-# CORS Configuration
-origins = [
-    settings.FRONTEND_URL,
-    "http://localhost:4321",
-    "http://127.0.0.1:4321",
-    "http://[::1]:4321",
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

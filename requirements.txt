@@ -4,12 +4,11 @@ sqlalchemy[asyncio]==2.0.31
 asyncpg==0.29.0
 alembic==1.13.1
 pydantic-settings==2.3.4
-PyJWT==2.8.0
+PyJWT[crypto]==2.8.0
+svix==1.24.0
 stripe==10.1.0
 openai==1.35.10
 pytest==8.2.2
 pytest-asyncio==0.23.7
 httpx==0.27.0
 pytest-mock==3.14.0
-python-multipart==0.0.9
-psycopg2-binary==2.9.9

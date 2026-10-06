@@ -6,13 +6,15 @@ import os
 # Add src to path so we can import internal modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from src.db.database import AsyncSessionLocal
 from src.models.user import User
+from src.services.pro import grant_pro
 
-async def upgrade_user(user_id: str = None, email: str = None):
+async def upgrade_user(user_id: str = None, email: str = None, days: int = None):
     """
-    Manually upgrades a user to the Pro tier in the local database.
+    Manually grants Pro to a user. `days=None` means lifetime; otherwise the
+    time is added on top of whatever the user has left.
     """
     async with AsyncSessionLocal() as session:
         query = select(User)
@@ -22,27 +24,33 @@ async def upgrade_user(user_id: str = None, email: str = None):
             query = query.where(User.email == email)
         else:
             print("Error: Must provide either --user-id or --email")
-            return
+            return 1
 
         result = await session.execute(query)
         user = result.scalar_one_or_none()
 
         if not user:
-            # If user not found, we create them (in case they haven't logged in yet but we want to grant Pro)
-            print(f"User not found in local DB. Creating new Pro user record...")
-            new_user = User(id=user_id, email=email, is_pro=True)
-            session.add(new_user)
-            await session.commit()
-            print(f"Successfully created and upgraded user: {user_id or email}")
-        else:
-            user.is_pro = True
-            await session.commit()
-            print(f"Successfully upgraded existing user: {user.id} ({user.email})")
+            if not user_id:
+                # Emails are only known once Clerk's user webhook has delivered them
+                print(f"Error: no user with email {email}. Use --user-id with the Clerk user ID instead.")
+                return 1
+            # User hasn't made a request yet but we want to grant Pro
+            print("User not found in local DB. Creating new user record...")
+            user = User(id=user_id, is_pro=False)
+            session.add(user)
+
+        grant_pro(user, days)
+        await session.commit()
+
+        until = user.pro_expires_at.isoformat() if user.pro_expires_at else "lifetime"
+        print(f"Successfully upgraded user: {user.id} ({user.email}) - Pro until: {until}")
+        return 0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manually upgrade a CVStudio user to Pro tier.")
     parser.add_argument("--user-id", type=str, help="The Clerk User ID")
     parser.add_argument("--email", type=str, help="The user email address")
+    parser.add_argument("--days", type=int, default=None, help="Days of Pro to grant (omit for lifetime)")
 
     args = parser.parse_args()
 
@@ -50,4 +58,4 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    asyncio.run(upgrade_user(user_id=args.user_id, email=args.email))
+    sys.exit(asyncio.run(upgrade_user(user_id=args.user_id, email=args.email, days=args.days)))

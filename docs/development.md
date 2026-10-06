@@ -13,18 +13,18 @@ Two independent git repositories side by side.
 ## Running with Docker (recommended)
 
 ```bash
-cp .env.example .env          # fill in what you need — see below
+cp .env.example .env          # fill in at least CLERK_ISSUER — see below
 docker compose up --build
 ```
 
-- `api` — built from `Dockerfile` (Python 3.11), served by Uvicorn with `--reload` on port **8000**.
-  The repo is bind-mounted at `/app`, so code edits reload live and the container reads your `.env`.
+- `api` — built from `Dockerfile` (Python 3.11). In Compose it runs
+  `alembic upgrade head && uvicorn … --reload` on port **8000**; the repo is bind-mounted at `/app`,
+  so code edits reload live and the container reads your `.env`.
 - `db` — `postgres:15-alpine` on port **5432**, user/password `postgres`/`postgres`, database
   `cvstudio`, data in the `postgres_data` volume.
 
-`docker-compose.yml` overrides `DATABASE_URL` to point at the `db` service. The other variables it
-lists are passed from your shell; anything else (`OPENAI_API_KEY`, the Stripe price ids,
-`FRONTEND_URL`) reaches the app through the mounted `.env` file.
+`docker-compose.yml` only overrides `DATABASE_URL` (to reach the `db` service); every other
+setting comes from the mounted `.env` file.
 
 Check it is up:
 
@@ -33,12 +33,15 @@ curl http://localhost:8000/health          # {"status":"healthy",…}
 # Swagger UI: http://localhost:8000/docs
 ```
 
+Podman works the same way (`podman compose …`, or `podman build` + `podman run`).
+
 ## Running without Docker
 
 ```bash
 python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 # needs a PostgreSQL reachable at DATABASE_URL
+alembic upgrade head
 uvicorn src.main:app --reload
 ```
 
@@ -50,145 +53,165 @@ the working directory.
 
 ## Environment variables
 
-Minimum to boot: `DATABASE_URL`. Everything else is optional and only breaks the feature that needs
-it. Full table in [architecture.md](./architecture.md#configuration-srccoreconfigpy).
+The process will not start without `DATABASE_URL` and `CLERK_ISSUER`. Everything else only breaks
+the feature that needs it. Full table in
+[architecture.md](./architecture.md#configuration-srccoreconfigpy).
 
 | To exercise… | You need |
 | :--- | :--- |
-| CV CRUD, `/users/me`, promo codes | `DATABASE_URL` only |
+| Any authenticated endpoint | `CLERK_ISSUER` — your Clerk instance's Frontend API URL, the same instance the frontend's `PUBLIC_CLERK_PUBLISHABLE_KEY` belongs to |
+| CV CRUD, `/users/me`, promo codes | nothing more |
 | AI endpoints | `OPENAI_API_KEY`, and a Pro user |
 | Checkout | `STRIPE_API_KEY` and the three `STRIPE_PRICE_*` |
-| Stripe webhook | `STRIPE_WEBHOOK_SECRET` |
+| Stripe webhook | `STRIPE_WEBHOOK_SECRET` (`stripe listen` prints one) |
+| Clerk webhook | `CLERK_WEBHOOK_SECRET` (and a tunnel so Clerk can reach your machine) |
 
-`.env.example` omits `ENVIRONMENT` and the three `STRIPE_PRICE_*` variables; add them by hand.
-
-To call the API by hand you need a Clerk session token; the easiest source is the browser's
-network tab while using the frontend.
+To call the API by hand you need a real Clerk session token; the easiest source is the browser's
+network tab while using the frontend. Tokens are short-lived (about a minute).
 
 ## Database and migrations
 
-Tables are created by the application: the `lifespan` hook in `src/main.py` runs
-`Base.metadata.create_all` on every startup. That creates missing **tables** but never alters
-existing ones.
+**Alembic owns the schema.** The application does not create or alter tables.
 
-Alembic is wired up (`alembic.ini`, async `migrations/env.py` reading `settings.DATABASE_URL`) but
-its history does not describe the schema:
+```bash
+alembic upgrade head                              # apply
+alembic revision --autogenerate -m "add x to y"   # create, then review the file
+alembic check                                     # fails if models and migrations disagree
+docker compose exec api alembic upgrade head      # inside Docker
+```
+
+`migrations/env.py` reads `settings.DATABASE_URL` and imports `src.models`, whose `__init__` imports
+every model module — add new model files there or autogenerate will not see them.
+
+Revision history:
 
 | Revision | What it does |
 | :--- | :--- |
-| `c19b7a9812e7` "Add promo codes table" | Nothing — `upgrade()` is `pass` |
-| `9db7771a15bc` "Add pro_expires_at to User" | `ALTER TABLE users ADD COLUMN pro_expires_at` |
+| `c19b7a9812e7` | Baseline: creates `users`, `cvs`, `promo_codes` **if they do not exist** |
+| `9db7771a15bc` | Adds `users.pro_expires_at` **if missing** |
+| `a4d2f7c1b9e3` | `cvs.theme`; `cvs.user_id` cascades; `promo_redemptions`, `payments`, `ai_requests` |
 
-There is no baseline revision creating `users`, `cvs` or `promo_codes`. As a result:
+The first two are guarded because databases created before this point were built by the
+application itself (`create_all`) and may or may not carry an `alembic_version` row. With the
+guards, `alembic upgrade head` is correct on an empty database, on such a pre-existing database,
+and on one that was already stamped. New revisions should not need guards.
 
-- On an **empty** database, `alembic upgrade head` fails (no `users` table).
-- On a database the app has already started against, `create_all` has built `users` with
-  `pro_expires_at` included, so `alembic upgrade head` fails on the duplicate column.
-- It only works on a database created *before* `pro_expires_at` existed.
+Where migrations run:
 
-Practical rules until this is repaired:
-
-- **Fresh environment:** start the app once, then `alembic stamp head`.
-- **Adding a column to an existing table:** `create_all` will not do it. Write a migration
-  (`alembic revision --autogenerate -m "…"`), review it, and run `alembic upgrade head` against
-  every environment.
-- **Adding a table:** import the model in `src/main.py` and `migrations/env.py` so it registers
-  with `Base`; `create_all` will create it, and a migration should still be written.
-
-Inside Docker: `docker compose exec api alembic upgrade head`.
+- **Production:** `scripts/start.sh` (the image's `CMD`) runs `alembic upgrade head` and then
+  starts Uvicorn. A failed migration stops the container before it serves traffic.
+- **Compose:** the `command` does the same, with `--reload`.
+- **Tests:** build the schema from the models (`Base.metadata.create_all`) on a scratch database.
 
 ## Tests
 
+The suite needs a PostgreSQL it may wipe (the models use `JSONB` and `UUID`). Tests drop and
+recreate all tables for every test, so **point it at a throwaway database, never a real one.**
+
+With Docker Compose:
+
 ```bash
-DATABASE_URL=postgresql+asyncpg://x:x@localhost/x pytest
+docker compose up -d db
+docker compose exec db psql -U postgres -c "CREATE DATABASE cvstudio_test"
+docker compose run --rm \
+  -e DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/cvstudio_test \
+  api pytest
 ```
 
-`pytest.ini` sets `asyncio_mode = auto` and `testpaths = test`. `DATABASE_URL` must be set (any
-syntactically valid value) because settings load at import; no database connection is made.
+Locally, `test/conftest.py` defaults to
+`postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test` and supplies dummy values for
+the other required settings. If the database is unreachable the database-backed tests are skipped,
+not failed — check the summary line.
 
-| Test | Covers |
+| File | Covers |
 | :--- | :--- |
-| `test/test_sanitizer.py` | `mask_cv_pii` redacts email, phone, city, social URLs; leaves the rest; does not mutate input |
-| `test/test_webhooks.py` | `POST /webhooks/clerk` with `user.deleted` returns 200 and calls `execute` + `commit` on a mocked session |
+| `test_security.py` | Token verification: valid; wrong key, expired, wrong issuer, wrong origin, no subject, wrong algorithm, unsigned, garbage |
+| `test_webhooks.py` | Clerk webhook: unsigned / wrong secret / tampered body rejected; `user.deleted` purges; `user.created` stores the email |
+| `test_pro.py` | `grant_pro`, `revoke_grant`, `apply_expiry` date arithmetic |
+| `test_billing_promo.py` | Stripe webhook (signature, idempotency, extension, unpaid, refund); checkout errors; promo redemption rules |
+| `test_cvs_users.py` | `/users/me`; CV CRUD with theme; ordering; ownership; free-tier limit |
+| `test_ai.py` | Pro gate, PII masking and restore, job description isolation, 502 on provider failure, rate limit, legacy shim, cover letter, ATS |
+| `test_sanitizer.py` | Masking and restoring in isolation |
 
-Pattern for API tests: `httpx.AsyncClient(transport=ASGITransport(app=app))` plus
-`app.dependency_overrides[get_db]` (the `get_db` from `src.api.dependencies`). Override
-`get_current_user` the same way to test authenticated routes.
+Patterns worth copying (`test/conftest.py`):
 
-Nothing else is covered: no tests for CV CRUD, the free-tier limit, Pro expiry, checkout, the Stripe
-webhook, promo redemption or the AI services.
+- `client` — an `httpx.AsyncClient` on the ASGI app with `get_db` and `get_current_user_id`
+  overridden. Switch user with the `current_user` fixture: `current_user["id"] = "user_other"`.
+- `db` — a session on the same scratch database, for arranging and asserting.
+- External services are faked, never called: `FakeOpenAI` in `test_ai.py`,
+  `stripe.Webhook.construct_event` monkeypatched in `test_billing_promo.py`, a local RSA key in
+  `test_security.py`, real Svix signing in `test_webhooks.py`.
 
-`testDB.py` and `test_get_cv.py` in the repo root are one-off debugging scripts (one has a
-hardcoded CV id). They are outside `testpaths` and are not tests.
-
-This repo has no CI workflow of its own. The frontend repo's `.github/workflows/ci.yml` contains a
-"Backend QA" job that expects both projects checked out as sibling directories.
+This repo has no CI workflow of its own yet.
 
 ## Admin scripts
 
 Run from the repo root (or `docker compose exec api …`).
 
 ```bash
-# Grant Pro by Clerk user id (find it in the Clerk dashboard, or in the users table)
+# Grant Pro by Clerk user id: lifetime, or a number of days added to what they have
 python src/scripts/upgrade_user.py --user-id user_2abc…
+python src/scripts/upgrade_user.py --user-id user_2abc… --days 30
+python src/scripts/upgrade_user.py --email jane@example.com --days 7   # once Clerk has synced the email
 
-# Create a promo code
+# Create a promo code (--uses 0 = unlimited, --days 9999 = lifetime)
 python create_promo.py --code LAUNCH30 --uses 100 --days 30
 ```
-
-`upgrade_user.py --email …` does not work in practice: the `email` column is never populated, and
-for an unknown email it tries to insert a user with no id.
 
 Useful SQL (`docker compose exec db psql -U postgres cvstudio`):
 
 ```sql
-SELECT id, is_pro, pro_expires_at FROM users;
-SELECT id, user_id, title, language, updated_at FROM cvs ORDER BY updated_at DESC;
+SELECT id, email, is_pro, pro_expires_at FROM users;
+SELECT id, user_id, title, language, theme, updated_at FROM cvs ORDER BY updated_at DESC;
 SELECT code, used_count, max_uses, granted_days, is_active FROM promo_codes;
+SELECT session_id, user_id, plan, created_at, refunded_at FROM payments ORDER BY created_at DESC;
+SELECT user_id, count(*) FROM ai_requests WHERE created_at > now() - interval '1 day' GROUP BY 1;
 ```
 
 ## Deployment
 
-Target is Railway, alongside the frontend. The variable checklist is `PROD-ENV-CHECKLIST.md` in the
-**frontend** repo. There is no Railway config file here; the service builds from `Dockerfile`.
+Target is Railway, alongside the frontend, built from `Dockerfile`. The variable checklist and
+deployment order are in `PROD-ENV-CHECKLIST.md` in the **frontend** repo.
 
-Things that differ from that checklist — verify before relying on it:
-
-| Checklist says | Code says |
-| :--- | :--- |
-| Stripe webhook at `/api/v1/billing/webhooks` | `/api/v1/webhooks/stripe` |
-| Health check at `/api/v1/health` | `/health` |
-| `CLERK_API_KEY` is required | Declared, never read |
-
-Production notes:
-
+- The image's `CMD` is `scripts/start.sh`: migrate, then `uvicorn` without `--reload` on `$PORT`
+  (default 8000).
 - Set `ENVIRONMENT=production` to hide `/docs`, `/redoc` and `/openapi.json`.
-- Set `FRONTEND_URL` to the real origin — it controls CORS and Stripe's return URLs.
-- The image's `CMD` runs Uvicorn with `--reload` on a fixed port 8000; override the start command
-  in production (no `--reload`, and bind to the platform's `$PORT` if it assigns one).
+- Set `FRONTEND_URL` to the real origin — it controls CORS, the accepted token origin and Stripe's
+  return URLs.
+- `CLERK_ISSUER` must be set **before** the first deploy of this version, or the service will not
+  start. That is deliberate.
 - `DATABASE_URL` may be given as `postgres://…` or `postgresql://…`; it is rewritten for asyncpg.
-- Configure the Clerk webhook (`user.deleted` → `/api/v1/webhooks/clerk`) and the Stripe webhook.
+- Register the Clerk and Stripe webhooks listed in
+  [auth-plans-billing.md](./auth-plans-billing.md).
+- Health check path: `/health`.
 
 ## Recipes
 
 ### Add an endpoint
 
-1. Request/response models in `src/schemas/`.
+1. Request/response models in `src/schemas/` (always a `response_model`, so internal columns are
+   not leaked).
 2. Route in the relevant file under `src/api/routers/`, with
-   `user_id: str = Depends(get_current_user)` and `db: AsyncSession = Depends(get_db)`.
-3. Scope every query by `user_id`; return `404` for missing and `403` for someone else's resource,
+   `user_id: str = Depends(get_current_user)` (or `user: User = Depends(get_current_user_obj)`)
+   and `db: AsyncSession = Depends(get_db)`.
+3. Scope every query by the user; return `404` for missing and `403` for someone else's resource,
    as `cv.py` does.
 4. New router file → `app.include_router(…, prefix="/api/v1")` in `src/main.py`.
-5. Add the client method to the frontend's `src/lib/api.ts`.
+5. A test using the `client` fixture.
+6. Add the client method to the frontend's `src/lib/api.ts`.
 
-### Add a column
+### Add a column or table
 
-Model → Alembic migration → Pydantic schema (if it should be accepted or returned) → frontend
-types. Remember that fields missing from a schema are silently dropped on input and omitted on
-output.
+Model → `alembic revision --autogenerate` → review → Pydantic schema (if it should be accepted or
+returned) → `alembic check` → frontend types. Fields missing from a schema are silently dropped on
+input and omitted on output. New model files must be imported in `src/models/__init__.py`.
 
 ### Make a route Pro-only
 
-Call `await check_pro_status(user_id, db)` from `routers/ai.py` (or move it to
-`api/dependencies.py` and use it as a dependency) **outside** any broad `try/except`, so the `403`
-is not converted to a `500`.
+`user: User = Depends(require_pro)`. For anything that calls a paid provider, use
+`Depends(enforce_ai_quota)` instead so it is rate-limited too.
+
+### Change how Pro is granted
+
+Only in `src/services/pro.py`, with tests in `test/test_pro.py`. Do not set `is_pro` or
+`pro_expires_at` anywhere else.
