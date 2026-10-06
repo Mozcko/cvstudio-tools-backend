@@ -1,5 +1,10 @@
 # CV Studio Tools Backend
 
+[![CI](https://github.com/Mozcko/cvstudio-tools-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Mozcko/cvstudio-tools-backend/actions/workflows/ci.yml)
+[![Security](https://github.com/Mozcko/cvstudio-tools-backend/actions/workflows/security.yml/badge.svg)](https://github.com/Mozcko/cvstudio-tools-backend/actions/workflows/security.yml)
+
+> **Documentation:** [`docs/`](./docs/README.md) · **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md) · **Security:** [`SECURITY.md`](./SECURITY.md)
+
 A robust FastAPI-based backend service for CV/Resume optimization tools. This service provides AI-powered features including CV improvements, cover letter generation, ATS (Applicant Tracking System) analysis, and professional translation.
 
 ## 🚀 Features

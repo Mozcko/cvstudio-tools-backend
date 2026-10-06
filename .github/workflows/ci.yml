@@ -6,11 +6,43 @@ on:
   pull_request:
     branches: [ main ]
 
-jobs:
-  test:
-    name: 🐍 Tests & Migrations
-    runs-on: ubuntu-latest
+# A newer push to the same branch or pull request replaces the run in progress
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.11'
+  # Dummy value: the tests verify tokens against a locally generated key
+  CLERK_ISSUER: https://clerk.test.example
+
+jobs:
+  lint:
+    name: 🧹 Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Same ruff version as requirements-dev.txt, without installing everything else
+      - name: Install ruff
+        run: pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      - name: Check formatting
+        run: ruff format --check --diff .
+
+  test:
+    name: 🧪 Tests & Coverage
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:15-alpine
@@ -25,34 +57,190 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
     env:
-      # Dummy value: tokens are verified against a locally generated key in the tests
-      CLERK_ISSUER: https://clerk.test.example
-
+      # The suite wipes the database it is given, so it gets its own
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
 
-      - name: Install Dependencies
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Fails if any test fails, if database tests were skipped, or if coverage drops
+      # below the minimum in pyproject.toml
+      - name: Run tests
+        run: |
+          pytest --cov --cov-report=term --cov-report=xml -rs | tee pytest.log
+          if grep -qE "[0-9]+ skipped" pytest.log; then
+            echo "::error::Tests were skipped. The database-backed tests must run in CI."
+            exit 1
+          fi
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "### Test coverage"
+            echo '```'
+            tail -n 25 pytest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  migrations:
+    name: 🗄️ Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cvstudio_migrations
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_migrations
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # The suite wipes the database it is given, so it gets its own
-      - name: Run Tests
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test
-        run: pytest
-
-      - name: Check Migrations
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_migrations
+      - name: Exactly one migration head
         run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE cvstudio_migrations"
+          heads=$(alembic heads | wc -l)
+          if [ "$heads" -ne 1 ]; then
+            echo "::error::Expected 1 Alembic head, found $heads. Merge the branches with 'alembic merge'."
+            alembic heads
+            exit 1
+          fi
+
+      - name: Upgrade an empty database
+        run: alembic upgrade head
+
+      - name: Models and migrations agree
+        run: alembic check
+
+      - name: Downgrade and upgrade again
+        run: |
+          alembic downgrade base
           alembic upgrade head
-          alembic check
+
+  docker:
+    name: 🐳 Docker Image
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cvstudio
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production image
+        run: docker build -t cvstudio-backend:ci .
+
+      - name: Production image has no test tools
+        run: |
+          if docker run --rm cvstudio-backend:ci python -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest is installed in the production image"
+            exit 1
+          fi
+
+      # Runs the real entrypoint: migrations, then the server on $PORT
+      - name: Start the container
+        run: |
+          docker run -d --name api --network host \
+            -e PORT=8080 \
+            -e ENVIRONMENT=production \
+            -e CLERK_ISSUER="$CLERK_ISSUER" \
+            -e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/cvstudio \
+            cvstudio-backend:ci
+
+      - name: Smoke test
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health | grep -q '"healthy"'; then
+              echo "Healthy after $attempt attempt(s)"
+              # No token: the API must refuse, and the docs must be hidden in production
+              test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/users/me)" -ge 401
+              test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/docs)" = "404"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The container did not become healthy"
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs api || true
+
+  audit:
+    name: 🔒 Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install "$(grep -E '^pip-audit==' requirements-dev.txt)"
+
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt
+
+  # Single status to require in branch protection: green only if every job above is green.
+  ci-passed:
+    name: ✅ CI passed
+    if: always()
+    needs: [lint, test, migrations, docker, audit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::At least one CI job did not succeed"
+              exit 1
+            fi
+          done

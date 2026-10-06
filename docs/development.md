@@ -14,12 +14,17 @@ Two independent git repositories side by side.
 
 ```bash
 cp .env.example .env          # fill in at least CLERK_ISSUER — see below
-docker compose up --build
+make up                       # or: docker compose up --build
 ```
 
-- `api` — built from `Dockerfile` (Python 3.11). In Compose it runs
-  `alembic upgrade head && uvicorn … --reload` on port **8000**; the repo is bind-mounted at `/app`,
-  so code edits reload live and the container reads your `.env`.
+`make help` lists the everyday tasks (`up`, `test`, `lint`, `format`, `check`, `migrate`,
+`migration`, `audit`). They all run inside the `api` container, so the only tools you need locally
+are Docker (or Podman: `make COMPOSE="podman compose" …`) and `make`.
+
+- `api` — built from `Dockerfile` (Python 3.11) with `INSTALL_DEV=true`, so the container also has
+  pytest, ruff and pip-audit. In Compose it runs `alembic upgrade head && uvicorn … --reload` on
+  port **8000**; the repo is bind-mounted at `/app`, so code edits reload live and the container
+  reads your `.env`.
 - `db` — `postgres:15-alpine` on port **5432**, user/password `postgres`/`postgres`, database
   `cvstudio`, data in the `postgres_data` volume.
 
@@ -33,13 +38,11 @@ curl http://localhost:8000/health          # {"status":"healthy",…}
 # Swagger UI: http://localhost:8000/docs
 ```
 
-Podman works the same way (`podman compose …`, or `podman build` + `podman run`).
-
 ## Running without Docker
 
 ```bash
 python3.11 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt     # requirements.txt alone is the production set
 # needs a PostgreSQL reachable at DATABASE_URL
 alembic upgrade head
 uvicorn src.main:app --reload
@@ -108,20 +111,18 @@ Where migrations run:
 The suite needs a PostgreSQL it may wipe (the models use `JSONB` and `UUID`). Tests drop and
 recreate all tables for every test, so **point it at a throwaway database, never a real one.**
 
-With Docker Compose:
-
 ```bash
-docker compose up -d db
-docker compose exec db psql -U postgres -c "CREATE DATABASE cvstudio_test"
-docker compose run --rm \
-  -e DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/cvstudio_test \
-  api pytest
+make test                                        # creates cvstudio_test if needed, runs with coverage
+make test ARGS="test/test_ai.py -k rate_limit"   # a subset
 ```
 
-Locally, `test/conftest.py` defaults to
-`postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test` and supplies dummy values for
-the other required settings. If the database is unreachable the database-backed tests are skipped,
-not failed — check the summary line.
+Without `make`, set `DATABASE_URL` to a scratch database and run `pytest --cov`.
+`test/conftest.py` defaults to `postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test`
+and supplies dummy values for the other required settings. If the database is unreachable the
+database-backed tests are skipped locally; CI treats a skipped test as a failure.
+
+Coverage is measured with branches and must stay at or above the `fail_under` value in
+`pyproject.toml` (95%).
 
 | File | Covers |
 | :--- | :--- |
@@ -132,6 +133,9 @@ not failed — check the summary line.
 | `test_cvs_users.py` | `/users/me`; CV CRUD with theme; ordering; ownership; free-tier limit |
 | `test_ai.py` | Pro gate, PII masking and restore, job description isolation, 502 on provider failure, rate limit, legacy shim, cover letter, ATS |
 | `test_sanitizer.py` | Masking and restoring in isolation |
+| `test_config.py` | Settings: URL rewriting, required and validated issuer, origins |
+| `test_scripts.py` | `upgrade_user.py` and `create_promo.py` against the test database |
+| `test_edge_cases.py` | Failure paths: unreachable identity provider, unusable model output, ignored Stripe events, Clerk webhook edge cases, size limits |
 
 Patterns worth copying (`test/conftest.py`):
 
@@ -142,8 +146,27 @@ Patterns worth copying (`test/conftest.py`):
   `stripe.Webhook.construct_event` monkeypatched in `test_billing_promo.py`, a local RSA key in
   `test_security.py`, real Svix signing in `test_webhooks.py`.
 
-CI (`.github/workflows/ci.yml`) runs the suite against a PostgreSQL service, then applies the
-migrations to an empty database and runs `alembic check`.
+## Lint and format
+
+```bash
+make lint      # ruff check + ruff format --check (what CI runs)
+make format    # apply fixes and formatting
+```
+
+Rules are in `pyproject.toml`: pycodestyle, pyflakes, import order, bugbear, pyupgrade and the
+bandit security rules.
+
+## CI/CD
+
+| Workflow | Trigger | Does |
+| :--- | :--- | :--- |
+| `ci.yml` | pull requests and pushes to `main` | Lint & format, tests with coverage, migrations (single head, upgrade, `alembic check`, downgrade/upgrade), production Docker image build and smoke test, dependency audit. `✅ CI passed` aggregates them and is the check required to merge |
+| `security.yml` | pull requests, pushes, weekly | CodeQL; weekly `pip-audit` |
+| `deploy.yml` | after CI succeeds on `main`, or manually | `railway up`, gated by the `production` environment, then a `/health` smoke test of the live URL |
+
+Dependabot (`.github/dependabot.yml`) proposes pip updates weekly and Actions / Docker updates
+monthly. Setup of the deploy secrets and the full contributor workflow are in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Admin scripts
 
@@ -171,8 +194,9 @@ SELECT user_id, count(*) FROM ai_requests WHERE created_at > now() - interval '1
 
 ## Deployment
 
-Target is Railway, alongside the frontend, built from `Dockerfile`. The variable checklist and
-deployment order are in `PROD-ENV-CHECKLIST.md` in the **frontend** repo.
+Target is Railway, alongside the frontend, built from `Dockerfile`. Deploys are done by
+`.github/workflows/deploy.yml` (see [CI/CD](#cicd) and `CONTRIBUTING.md`). The variable checklist
+and deployment order are in `PROD-ENV-CHECKLIST.md` in the **frontend** repo.
 
 - The image's `CMD` is `scripts/start.sh`: migrate, then `uvicorn` without `--reload` on `$PORT`
   (default 8000).

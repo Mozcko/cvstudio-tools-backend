@@ -10,7 +10,7 @@ Unless marked otherwise, every endpoint needs `Authorization: Bearer <Clerk sess
 | Status | When | Body |
 | :--- | :--- | :--- |
 | `401` | Token is missing a valid signature, expired, from another issuer or origin, or has no `sub` | `{"detail": "Could not validate credentials"}` |
-| `403` | No `Authorization` header at all (FastAPI's `HTTPBearer` default) | `{"detail": "Not authenticated"}` |
+| `401` | No `Authorization` header at all | `{"detail": "Not authenticated"}` |
 | `422` | Body or path fails validation (e.g. a CV id that is not a UUID) | FastAPI validation error list |
 | `503` | Clerk's key set could not be fetched | `{"detail": "Authentication service unavailable"}` |
 
