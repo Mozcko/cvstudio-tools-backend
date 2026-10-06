@@ -2,8 +2,10 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from src.api.routers import ai, billing, cv, users, webhooks
+from src.api.routers import promo as promo_router
 from src.core.config import settings
-from src.api.routers import cv, webhooks, ai, billing, users, promo as promo_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -15,7 +17,7 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
-    openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None
+    openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None,
 )
 
 app.add_middleware(
@@ -34,10 +36,13 @@ app.include_router(ai.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(promo_router.router, prefix="/api/v1")
 
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "project": settings.PROJECT_NAME}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

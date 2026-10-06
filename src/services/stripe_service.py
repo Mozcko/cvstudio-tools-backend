@@ -1,11 +1,12 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import stripe
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.core.config import settings
 from src.models.payment import Payment
 from src.models.user import User
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # plan_duration metadata -> days of Pro (None = lifetime)
 PLAN_DAYS = {"7": 7, "30": 30, "lifetime": None}
+
 
 async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
     if session.get("payment_status") != "paid":
@@ -46,19 +48,22 @@ async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
         db.add(user)
 
     grant_pro(user, days)
-    db.add(Payment(
-        session_id=session_id,
-        user_id=clerk_user_id,
-        plan=plan_duration,
-        payment_intent=session.get("payment_intent"),
-        granted_days=days,
-    ))
+    db.add(
+        Payment(
+            session_id=session_id,
+            user_id=clerk_user_id,
+            plan=plan_duration,
+            payment_intent=session.get("payment_intent"),
+            granted_days=days,
+        )
+    )
 
     try:
         await db.commit()
     except IntegrityError:
         # A concurrent delivery of the same event won the race
         await db.rollback()
+
 
 async def _handle_charge_refunded(charge: dict, db: AsyncSession) -> None:
     if not charge.get("refunded"):
@@ -70,9 +75,7 @@ async def _handle_charge_refunded(charge: dict, db: AsyncSession) -> None:
         return
 
     result = await db.execute(
-        select(Payment)
-        .where(Payment.payment_intent == payment_intent, Payment.refunded_at.is_(None))
-        .with_for_update()
+        select(Payment).where(Payment.payment_intent == payment_intent, Payment.refunded_at.is_(None)).with_for_update()
     )
     payment = result.scalar_one_or_none()
     if not payment:
@@ -83,26 +86,24 @@ async def _handle_charge_refunded(charge: dict, db: AsyncSession) -> None:
     if user:
         revoke_grant(user, payment.granted_days)
 
-    payment.refunded_at = datetime.now(timezone.utc)
+    payment.refunded_at = datetime.now(UTC)
     await db.commit()
+
 
 async def process_webhook_event(payload: bytes, sig_header: str, db: AsyncSession):
     if not settings.STRIPE_WEBHOOK_SECRET:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Stripe webhook secret not configured"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stripe webhook secret not configured"
         )
 
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
-        )
+        event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_WEBHOOK_SECRET)
     except ValueError:
         # Invalid payload
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload") from None
     except stripe.SignatureVerificationError:
         # Invalid signature
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature") from None
 
     event_type = event["type"]
     obj = event["data"]["object"]

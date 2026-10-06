@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import stripe
@@ -20,29 +20,27 @@ async def get_user(db, user_id=USER):
 def stripe_event(monkeypatch):
     """Lets a test choose the event Stripe 'sends'; signature checking is stubbed out."""
     holder = {}
-    monkeypatch.setattr(
-        stripe.Webhook, "construct_event", lambda payload, sig, secret: holder["event"]
-    )
+    monkeypatch.setattr(stripe.Webhook, "construct_event", lambda payload, sig, secret: holder["event"])
     return holder
 
 
 def checkout_event(session_id="cs_1", plan="30", payment_status="paid", payment_intent="pi_1"):
     return {
         "type": "checkout.session.completed",
-        "data": {"object": {
-            "id": session_id,
-            "payment_status": payment_status,
-            "client_reference_id": USER,
-            "payment_intent": payment_intent,
-            "metadata": {"plan_duration": plan},
-        }},
+        "data": {
+            "object": {
+                "id": session_id,
+                "payment_status": payment_status,
+                "client_reference_id": USER,
+                "payment_intent": payment_intent,
+                "metadata": {"plan_duration": plan},
+            }
+        },
     }
 
 
 async def send_webhook(client):
-    return await client.post(
-        "/api/v1/webhooks/stripe", content=b"{}", headers={"Stripe-Signature": "t=1,v1=x"}
-    )
+    return await client.post("/api/v1/webhooks/stripe", content=b"{}", headers={"Stripe-Signature": "t=1,v1=x"})
 
 
 async def test_stripe_webhook_requires_signature_header(client):
@@ -66,7 +64,7 @@ async def test_checkout_grants_pro_once(client, db, stripe_event):
     user = await get_user(db)
     assert user.is_pro
     assert user.pro_expires_at == first_expiry
-    assert abs(user.pro_expires_at - (datetime.now(timezone.utc) + timedelta(days=30))) < timedelta(minutes=1)
+    assert abs(user.pro_expires_at - (datetime.now(UTC) + timedelta(days=30))) < timedelta(minutes=1)
     assert (await db.execute(select(func.count()).select_from(Payment))).scalar() == 1
 
 
@@ -77,7 +75,7 @@ async def test_second_purchase_extends_instead_of_overwriting(client, db, stripe
     await send_webhook(client)
 
     user = await get_user(db)
-    assert abs(user.pro_expires_at - (datetime.now(timezone.utc) + timedelta(days=37))) < timedelta(minutes=1)
+    assert abs(user.pro_expires_at - (datetime.now(UTC) + timedelta(days=37))) < timedelta(minutes=1)
 
 
 async def test_unpaid_session_grants_nothing(client, db, stripe_event):
@@ -150,14 +148,16 @@ async def test_promo_redeem_once_per_user(client, db, current_user):
     promo = (await db.execute(select(PromoCode))).scalar_one()
     assert promo.used_count == 2
     user = await get_user(db)
-    assert abs(user.pro_expires_at - (datetime.now(timezone.utc) + timedelta(days=30))) < timedelta(minutes=1)
+    assert abs(user.pro_expires_at - (datetime.now(UTC) + timedelta(days=30))) < timedelta(minutes=1)
 
 
 async def test_promo_limits_and_lifetime(client, db, current_user):
-    db.add_all([
-        PromoCode(code="ONCE", max_uses=1, granted_days=9999),
-        PromoCode(code="OFF", max_uses=5, granted_days=30, is_active=False),
-    ])
+    db.add_all(
+        [
+            PromoCode(code="ONCE", max_uses=1, granted_days=9999),
+            PromoCode(code="OFF", max_uses=5, granted_days=30, is_active=False),
+        ]
+    )
     await db.commit()
 
     assert (await client.post("/api/v1/promo/redeem", json={"code": "NOPE"})).status_code == 404

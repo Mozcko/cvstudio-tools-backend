@@ -1,11 +1,15 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index
+import uuid
+
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-import uuid
+
 from src.db.database import Base
+
 
 class AIRequest(Base):
     """One row per accepted AI call. Used for per-user rate limiting."""
+
     __tablename__ = "ai_requests"
     __table_args__ = (Index("ix_ai_requests_user_created", "user_id", "created_at"),)
 

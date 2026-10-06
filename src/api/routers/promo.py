@@ -1,34 +1,30 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 import logging
 
-from src.api.dependencies import get_db, get_current_user
-from src.models.user import User
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.dependencies import get_current_user, get_db
 from src.models.promo import PromoCode, PromoRedemption
+from src.models.user import User
 from src.schemas.promo_schemas import PromoRedeemRequest, PromoRedeemResponse
 from src.services.pro import grant_pro
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/promo", tags=["Promo"])
 
+
 @router.post("/redeem", response_model=PromoRedeemResponse)
 async def redeem_promo(
-    request: PromoRedeemRequest,
-    db: AsyncSession = Depends(get_db),
-    user_id: str = Depends(get_current_user)
+    request: PromoRedeemRequest, db: AsyncSession = Depends(get_db), user_id: str = Depends(get_current_user)
 ):
     code_str = request.code.strip()
     if not code_str:
         raise HTTPException(status_code=400, detail="Promo code cannot be empty")
 
     # Lock the promo code row for update to prevent race conditions
-    result = await db.execute(
-        select(PromoCode)
-        .where(PromoCode.code == code_str)
-        .with_for_update()
-    )
+    result = await db.execute(select(PromoCode).where(PromoCode.code == code_str).with_for_update())
     promo = result.scalar_one_or_none()
 
     if not promo:
@@ -51,11 +47,7 @@ async def redeem_promo(
         raise HTTPException(status_code=400, detail="You have already redeemed this code")
 
     # Fetch user
-    user_result = await db.execute(
-        select(User)
-        .where(User.id == user_id)
-        .with_for_update()
-    )
+    user_result = await db.execute(select(User).where(User.id == user_id).with_for_update())
     user = user_result.scalar_one_or_none()
 
     if not user:
@@ -69,14 +61,12 @@ async def redeem_promo(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=400, detail="You have already redeemed this code")
+        raise HTTPException(status_code=400, detail="You have already redeemed this code") from None
     except Exception:
         await db.rollback()
         logger.exception("Error redeeming promo")
-        raise HTTPException(status_code=500, detail="Could not redeem promo code")
+        raise HTTPException(status_code=500, detail="Could not redeem promo code") from None
 
     return PromoRedeemResponse(
-        success=True,
-        message="Promotional code redeemed successfully",
-        granted_days=promo.granted_days
+        success=True, message="Promotional code redeemed successfully", granted_days=promo.granted_days
     )

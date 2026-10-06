@@ -1,0 +1,51 @@
+# Tooling configuration. Dependencies are pinned in requirements.txt / requirements-dev.txt.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",  # pycodestyle
+  "F",       # pyflakes
+  "I",       # import order
+  "B",       # bugbear: likely bugs
+  "UP",      # modern syntax
+  "S",       # bandit: security
+]
+ignore = [
+  "B008",  # FastAPI's Depends(...) in argument defaults is the framework's idiom
+  "E501",  # line length is handled by the formatter; long prompt strings are fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**" = ["S101", "S105", "S106"]   # asserts and dummy secrets belong in tests
+"src/main.py" = ["S104"]               # binding 0.0.0.0 is required inside a container
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]
+python_files = ["test_*.py"]
+filterwarnings = [
+  "ignore::jwt.warnings.InsecureKeyLengthWarning",   # deliberately weak key in a negative test
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+# SQLAlchemy's async engine runs on greenlets; without this, lines after an await are missed
+concurrency = ["greenlet", "thread"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# CI fails below this. Raise it as coverage grows; never lower it to make a PR pass.
+fail_under = 95
+exclude_also = [
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]

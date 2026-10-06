@@ -1,15 +1,17 @@
-import asyncio
 import argparse
-import sys
+import asyncio
 import os
+import sys
 
 # Add src to path so we can import internal modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from sqlalchemy import select
+
 from src.db.database import AsyncSessionLocal
 from src.models.user import User
 from src.services.pro import grant_pro
+
 
 async def upgrade_user(user_id: str = None, email: str = None, days: int = None):
     """
@@ -45,6 +47,7 @@ async def upgrade_user(user_id: str = None, email: str = None, days: int = None)
         until = user.pro_expires_at.isoformat() if user.pro_expires_at else "lifetime"
         print(f"Successfully upgraded user: {user.id} ({user.email}) - Pro until: {until}")
         return 0
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manually upgrade a CVStudio user to Pro tier.")

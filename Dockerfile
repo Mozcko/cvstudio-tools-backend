@@ -8,9 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install python dependencies.
+# INSTALL_DEV=true adds the test and lint tools (used by docker compose and CI, not production).
+ARG INSTALL_DEV=false
+COPY requirements.txt requirements-dev.txt ./
+RUN if [ "$INSTALL_DEV" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-dev.txt; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 # Copy source code
 COPY . .

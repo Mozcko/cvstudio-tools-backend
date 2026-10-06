@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -19,8 +19,7 @@ async def test_me_creates_user_and_hides_internal_fields(client):
 
 
 async def test_me_applies_expiry(client, db):
-    db.add(User(id="user_test_1", is_pro=True,
-                pro_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1)))
+    db.add(User(id="user_test_1", is_pro=True, pro_expires_at=datetime.now(UTC) - timedelta(minutes=1)))
     await db.commit()
 
     response = await client.get("/api/v1/users/me")

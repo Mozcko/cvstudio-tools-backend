@@ -1,11 +1,11 @@
-from typing import Optional
-
-from src.services.ai.base import AIResponseError, LANGUAGE_NAMES, get_ai_client
-from src.utils.sanitizer import mask_cv_pii
 import json
 from datetime import datetime
 
-async def generate_cover_letter(cv_data: dict, job_description: str, language: Optional[str] = None) -> str:
+from src.services.ai.base import LANGUAGE_NAMES, AIResponseError, get_ai_client
+from src.utils.sanitizer import mask_cv_pii
+
+
+async def generate_cover_letter(cv_data: dict, job_description: str, language: str | None = None) -> str:
     client, model = get_ai_client()
 
     # Extract real personal info for header (without giving it to AI)
@@ -40,7 +40,7 @@ async def generate_cover_letter(cv_data: dict, job_description: str, language: O
                     f"<job_description>\n{job_description}\n</job_description>"
                 ),
             },
-        ]
+        ],
     )
 
     letter_body = response.choices[0].message.content

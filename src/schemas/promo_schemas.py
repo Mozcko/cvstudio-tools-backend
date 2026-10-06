@@ -1,8 +1,9 @@
 from pydantic import BaseModel
-from typing import Optional
+
 
 class PromoRedeemRequest(BaseModel):
     code: str
+
 
 class PromoRedeemResponse(BaseModel):
     success: bool

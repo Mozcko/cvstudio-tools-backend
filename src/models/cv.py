@@ -1,8 +1,11 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey
+import uuid
+
+from sqlalchemy import Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
-import uuid
+
 from src.db.database import Base
+
 
 class CV(Base):
     __tablename__ = "cvs"
