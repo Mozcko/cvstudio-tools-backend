@@ -9,11 +9,13 @@ Unless marked otherwise, every endpoint needs `Authorization: Bearer <Clerk sess
 
 | Status | When | Body |
 | :--- | :--- | :--- |
-| `401` | Token cannot be decoded or has no `sub` | `{"detail": "Could not validate credentials"}` |
+| `401` | Token is missing a valid signature, expired, from another issuer or origin, or has no `sub` | `{"detail": "Could not validate credentials"}` |
 | `403` | No `Authorization` header at all (FastAPI's `HTTPBearer` default) | `{"detail": "Not authenticated"}` |
 | `422` | Body or path fails validation (e.g. a CV id that is not a UUID) | FastAPI validation error list |
+| `503` | Clerk's key set could not be fetched | `{"detail": "Authentication service unavailable"}` |
 
 Errors always carry a `detail` field; the frontend's API client surfaces it as the error message.
+Details are written for end users — provider and internal errors are logged, not returned.
 
 ## Summary
 
@@ -22,18 +24,18 @@ Errors always carry a `detail` field; the frontend's API client surfaces it as t
 | `GET` | `/health` *(no `/api/v1`)* | — | — | Liveness |
 | `GET` | `/users/me` | ✅ | — | Current user and Pro status |
 | `POST` | `/cvs/` | ✅ | — | Create a CV (free tier: max 3) |
-| `GET` | `/cvs/` | ✅ | — | List own CVs |
+| `GET` | `/cvs/` | ✅ | — | List own CVs, newest first |
 | `GET` | `/cvs/{cv_id}` | ✅ | — | Read one CV |
 | `PUT` | `/cvs/{cv_id}` | ✅ | — | Partial update |
 | `DELETE` | `/cvs/{cv_id}` | ✅ | — | Delete |
-| `POST` | `/ai/improve` | ✅ | ✅ | Enhance / optimize / translate |
+| `POST` | `/ai/rewrite` | ✅ | ✅ | Enhance / optimize / translate a CV |
+| `POST` | `/ai/improve` | ✅ | ✅ | **Deprecated** shim for `/ai/rewrite` |
 | `POST` | `/ai/cover-letter` | ✅ | ✅ | Generate a cover letter |
 | `POST` | `/ai/ats` | ✅ | ✅ | ATS simulation |
 | `POST` | `/billing/create-checkout-session` | ✅ | — | Start a Stripe Checkout |
-| `POST` | `/billing/redeem` | ✅ | — | Redeem a promo code (older implementation) |
-| `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code (current implementation) |
-| `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed |
-| `POST` | `/webhooks/clerk` | Clerk | — | User deleted |
+| `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code |
+| `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed / refunded |
+| `POST` | `/webhooks/clerk` | Svix signature | — | User created / updated / deleted |
 
 ## Health
 
@@ -49,22 +51,13 @@ Does not touch the database.
 
 ### `GET /users/me`
 
-Returns the caller's `users` row, creating it if this is their first request. There is no response
-model, so the whole row is serialised:
+Returns the caller's user, creating the row on first sight and applying Pro expiry.
 
 ```json
-{
-  "id": "user_2abc…",
-  "email": null,
-  "is_pro": false,
-  "pro_expires_at": null,
-  "created_at": "2026-06-19T10:00:00Z",
-  "updated_at": null
-}
+{ "id": "user_2abc…", "is_pro": false, "pro_expires_at": null }
 ```
 
-This endpoint depends on `get_current_user_id`, not `get_current_user`, so it does **not** apply
-Pro expiry. See [known-issues.md](./known-issues.md).
+`pro_expires_at` is `null` for free users and for lifetime Pro.
 
 ## CVs
 
@@ -77,28 +70,30 @@ Shared response shape (`CVResponse`):
   "title": "Backend Engineer",
   "content": { "personal": { "name": "…" }, "experience": [] },
   "language": "ES",
+  "theme": "modern",
   "created_at": "…",
   "updated_at": "…"
 }
 ```
 
-`content` is any JSON object. The backend does not validate its structure.
+`content` is any JSON object; the backend does not validate its structure. `theme` is an opaque
+string chosen by the frontend (max 64 characters) or `null`.
 
 ### `POST /cvs/` → `201`
 
 ```json
-{ "title": "string", "content": { }, "language": "ES" }
+{ "title": "string", "content": { }, "language": "ES", "theme": "modern" }
 ```
 
-`language` is optional (default `ES`). Extra fields are ignored — the frontend sends an `id`, which
-is discarded; the server assigns its own UUID and the client must use the one in the response.
+`language` (default `ES`) and `theme` are optional. Unknown fields are ignored. The server assigns
+the id.
 
 - `403` `Free tier limit reached (3 CVs). Please upgrade to Pro to create more.` — caller is not
-  Pro and already owns three or more CVs.
+  Pro and already owns `FREE_CV_LIMIT` CVs.
 
 ### `GET /cvs/` → `200`
 
-Array of `CVResponse` for the caller. No pagination and no explicit ordering.
+Array of `CVResponse` for the caller, ordered by `updated_at` descending. No pagination.
 
 ### `GET /cvs/{cv_id}` → `200`
 
@@ -108,7 +103,7 @@ Array of `CVResponse` for the caller. No pagination and no explicit ordering.
 ### `PUT /cvs/{cv_id}` → `200`
 
 ```json
-{ "title": "string?", "content": { }, "language": "string?" }
+{ "title": "string?", "content": { }, "language": "string?", "theme": "string?" }
 ```
 
 All fields optional; only those present and non-null are changed. `content` is replaced wholesale,
@@ -120,38 +115,56 @@ Same `404` / `403` as above.
 
 ## AI
 
-All three require `is_pro`. See [ai-services.md](./ai-services.md) for what happens inside.
+All AI endpoints share the same gate (`enforce_ai_quota`), evaluated before any work is done:
 
-Every handler wraps its whole body in `try / except Exception`, so **all failures come back as
-`500` with the exception text in `detail`** — including the "not Pro" check, which surfaces as
-`500` `"403: This feature requires a Pro subscription."`.
+| Status | Detail | Meaning |
+| :--- | :--- | :--- |
+| `403` | `This feature requires a Pro subscription.` | Caller is not Pro |
+| `429` | `AI usage limit reached. Please try again later.` | Per-user hourly or daily limit hit; `Retry-After` header gives seconds |
+| `502` | `The AI service could not process this request. Please try again.` | Provider error or unusable model output |
+| `503` | `AI features are not available right now.` | `OPENAI_API_KEY` is not configured |
 
-### `POST /ai/improve`
+Size limits (→ `422`): `job_description` up to 20 000 characters; `cv_content` up to 200 000
+characters of JSON.
+
+See [ai-services.md](./ai-services.md) for what happens inside.
+
+### `POST /ai/rewrite`
 
 ```json
-{ "text": "string", "context": "string (optional, default 'resume bullet point')" }
+{
+  "cv_content": { },
+  "action": "enhance" | "optimize" | "translate",
+  "target_language": "es" | "en" | "pt",
+  "job_description": "string (required when action is 'optimize')"
+}
 ```
 ```json
-{ "improved_text": "string" }
+{ "cv": { "…the rewritten CV, same structure…" } }
 ```
 
-When `text` starts with `{`, the model is forced into JSON mode and `improved_text` is a JSON
-**string** the caller must parse. `context` is a free-text control channel; the frontend sends
-`"Action: <enhance|optimize|translate>, Lang: <es|en|pt>, JD: <job description>"`.
+Contact details in `cv_content` are masked before the model sees them and restored in the result.
+
+### `POST /ai/improve` *(deprecated)*
+
+Kept so a frontend that predates `/ai/rewrite` keeps working. Accepts
+`{ "text": "<CV as JSON string>", "context": "Action: <action>, Lang: <lang>, JD: <text>" }` and
+answers `{ "improved_text": "<CV as JSON string>" }`. Anything that does not match that exact
+shape gets `400` `Unsupported request. Use POST /ai/rewrite.` Remove once no deployed client calls it.
 
 ### `POST /ai/cover-letter`
 
 ```json
-{ "cv_content": { }, "job_description": "string" }
+{ "cv_content": { }, "job_description": "string", "language": "es | en | pt (optional)" }
 ```
 ```json
-{ "cover_letter": "Jane Doe\nMexico City\njane@example.com\n+52…\nJune 19, 2026\n\nDear Hiring Manager, …" }
+{ "cover_letter": "Jane Doe\nMexico City\njane@example.com\n+52…\n2026-10-06\n\nDear Hiring Manager, …" }
 ```
 
 ### `POST /ai/ats`
 
 ```json
-{ "cv_content": { }, "job_description": "string" }
+{ "cv_content": { }, "job_description": "string", "language": "es | en | pt (optional)" }
 ```
 ```json
 {
@@ -166,8 +179,7 @@ When `text` starts with `{`, the model is forced into JSON mode and `improved_te
 }
 ```
 
-The object is whatever the model returned, parsed with `json.loads`; it is not validated against
-this shape.
+The object is the model's JSON answer; its fields are requested by the prompt, not validated.
 
 ## Billing
 
@@ -181,21 +193,20 @@ this shape.
 ```
 
 - `422` — `plan_type` is not one of the three literals.
-- `400` `Invalid plan type or Price ID not configured` — the matching `STRIPE_PRICE_*` is unset.
-- `500` — any Stripe error, with Stripe's message in `detail`.
+- `503` `This plan is not available right now.` — Stripe key or the matching `STRIPE_PRICE_*` unset.
+- `502` `Could not start the checkout. Please try again.` — Stripe rejected the request.
 
 The session is `mode="payment"` (one-off), with `client_reference_id` = the Clerk user id and
 `metadata.plan_duration` = `plan_type`. Success returns the browser to
 `{FRONTEND_URL}/app/dashboard?session_id=…`, cancel to `{FRONTEND_URL}/app/dashboard`.
 
-### `POST /billing/redeem` and `POST /promo/redeem`
+## Promo codes
 
-Both take `{ "code": "string" }`. They are two implementations of the same feature with different
-rules — compared in [auth-plans-billing.md](./auth-plans-billing.md#promo-codes). The frontend
-(on its `main` branch) calls **`/promo/redeem`**.
+### `POST /promo/redeem`
 
-`/promo/redeem` →
-
+```json
+{ "code": "string" }
+```
 ```json
 { "success": true, "message": "Promotional code redeemed successfully", "granted_days": 30 }
 ```
@@ -206,34 +217,41 @@ rules — compared in [auth-plans-billing.md](./auth-plans-billing.md#promo-code
 | `404` | `Invalid promotional code` |
 | `400` | `Promotional code is no longer active` |
 | `400` | `Promotional code usage limit reached` |
-| `404` | `User not found` |
+| `400` | `You have already redeemed this code` |
 | `500` | `Could not redeem promo code` |
-
-`/billing/redeem` →
-
-```json
-{ "success": true, "message": "Code redeemed successfully! 30 days of Pro access granted.", "is_pro": true }
-```
-
-- `400` `Invalid or expired code` for every failure case.
 
 ## Webhooks
 
 ### `POST /webhooks/stripe`
 
-Called by Stripe. Requires the `Stripe-Signature` header; the raw body is verified against
-`STRIPE_WEBHOOK_SECRET`.
+Called by Stripe. The raw body is verified against `STRIPE_WEBHOOK_SECRET` using the
+`Stripe-Signature` header.
 
 | Status | Detail |
 | :--- | :--- |
 | `400` | `Missing Stripe-Signature header` / `Invalid payload` / `Invalid signature` |
 | `500` | `Stripe webhook secret not configured` |
-| `200` | `{"status": "success"}` — for handled **and** unhandled event types |
+| `200` | `{"status": "success"}` — for handled **and** ignored event types |
 
-Only `checkout.session.completed` has an effect: the user named by `client_reference_id` becomes
-Pro, with expiry now + 7 or 30 days, or no expiry for `lifetime`.
+| Event | Effect |
+| :--- | :--- |
+| `checkout.session.completed`, `checkout.session.async_payment_succeeded` | If `payment_status` is `paid`: grant the plan to `client_reference_id` and record the payment. A session is applied once, however often it is delivered |
+| `charge.refunded` (full refund) | Take back the grant recorded for that payment intent |
+| anything else | Ignored |
 
 ### `POST /webhooks/clerk`
 
-Called by Clerk. Reads the JSON body; on `type == "user.deleted"` deletes that user's CVs and then
-the user row. Always returns `{"status": "success"}`.
+Called by Clerk (delivered through Svix). The raw body is verified against `CLERK_WEBHOOK_SECRET`
+using the `svix-id`, `svix-timestamp` and `svix-signature` headers.
+
+| Status | Detail |
+| :--- | :--- |
+| `400` | `Invalid signature` / `Invalid payload` |
+| `500` | `Clerk webhook secret not configured` |
+| `200` | `{"status": "success"}` |
+
+| Event | Effect |
+| :--- | :--- |
+| `user.created`, `user.updated` | Create the user row if needed and store the primary email |
+| `user.deleted` | Delete the user and, by cascade, their CVs, promo redemptions and AI usage |
+| anything else | Ignored |

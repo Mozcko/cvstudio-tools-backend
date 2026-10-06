@@ -1,108 +1,134 @@
 # AI Services
 
-Code: `src/services/ai/`, exposed by `src/api/routers/ai.py`. All three endpoints are Pro-only.
+Code: `src/services/ai/`, exposed by `src/api/routers/ai.py`.
 
 ## Provider and model
 
-`src/services/ai/base.py` builds two `AsyncOpenAI` clients at import time, one for OpenAI and one
-for DeepSeek (an OpenAI-compatible API), each only if its key is set.
+`src/services/ai/base.py` exposes `get_ai_client()` → `(AsyncOpenAI client, model name)`. The client
+is created lazily from `OPENAI_API_KEY`; the model comes from the `OPENAI_MODEL` setting (default
+`gpt-4o-mini`). Without a key it raises `AINotConfiguredError`, which the router turns into `503`.
 
-`get_ai_client(provider="openai")` returns `(client, model)`:
+There is one provider. To use another OpenAI-compatible service, this function is the only place
+to change.
 
-| Provider requested | Returns |
-| :--- | :--- |
-| `"openai"` (the default, and what every caller passes) | OpenAI client, `gpt-4o-mini` |
-| `"deepseek"` with a DeepSeek key | DeepSeek client, `deepseek-chat` |
-| anything, with no OpenAI key | `ValueError("OpenAI API key is missing.")` |
+No temperature, token limit, timeout or retry is set on the calls — SDK defaults apply.
 
-In practice **every feature runs on OpenAI `gpt-4o-mini`**. DeepSeek is configured but never
-selected, and there is no fallback between providers. The model name is hardcoded here; changing
-models is a one-line edit in `base.py`.
+## The gate: Pro and rate limit
 
-No temperature, token limit, timeout or retry is set on any call — SDK defaults apply.
+Every AI route depends on `enforce_ai_quota` (`src/api/dependencies.py`):
+
+1. `require_pro` → `403` for non-Pro users.
+2. Count the user's rows in `ai_requests` for the last hour and the last day. At or above
+   `AI_RATE_LIMIT_PER_HOUR` (20) / `AI_RATE_LIMIT_PER_DAY` (100) → `429` with a `Retry-After`
+   header (seconds until the oldest call leaves the window). A limit of `0` disables that window.
+3. Otherwise insert an `ai_requests` row (`user_id`, `endpoint`) and continue.
+
+The call is recorded before the provider is contacted, so failed attempts count too. The table
+doubles as a simple usage log:
+
+```sql
+SELECT user_id, endpoint, count(*) FROM ai_requests
+WHERE created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+Request bodies are size-limited in `src/schemas/ai_schemas.py` (job description 20 000 characters,
+CV 200 000 characters of JSON).
 
 ## PII masking (`src/utils/sanitizer.py`)
 
-`mask_cv_pii(cv_data)` deep-copies the CV and replaces these with `"[REDACTED_PII]"`:
+**Every** CV is masked before it is sent to the model.
+
+`mask_cv_pii(cv)` deep-copies the CV and replaces these with `"[REDACTED_PII]"`:
 
 - `personal.email`, `personal.phone`, `personal.city`, `personal.address`
 - every `personal.socials[].url`
 
-It does **not** touch `personal.name`, the summary, or anything in experience, education, projects
-or custom sections.
+`restore_cv_pii(original, processed)` is the inverse, used when the model returns a CV: it puts the
+real values back **from the original**, so whatever the model wrote in those fields is discarded.
+If the model changed the number of social links, the user's own list is restored whole.
 
-| Feature | Masked before the LLM call? |
-| :--- | :--- |
-| ATS simulation | ✅ |
-| Cover letter | ✅ |
-| Improve / optimize / translate | ❌ — the CV travels as a string in `text` and is sent as is |
+Not masked: the candidate's name, the summary, and everything in experience, education, projects
+and custom sections.
+
+| Feature | Masked | Restored |
+| :--- | :---: | :---: |
+| Rewrite (enhance / optimize / translate) | ✅ | ✅ |
+| ATS simulation | ✅ | n/a (no CV in the answer) |
+| Cover letter | ✅ | n/a (header is built in Python from the real values) |
+
+## Prompt structure
+
+All three services follow the same rules:
+
+- The **system** message holds only our instructions. User-supplied text never goes there.
+- The **user** message carries the data in tags: `<cv>…</cv>` and
+  `<job_description>…</job_description>`.
+- The system message states that tag contents are data, not instructions.
+- `target_language` / `language` is one of `es`, `en`, `pt`, mapped to a language name in
+  `LANGUAGE_NAMES`.
 
 ## The three features
 
-### Improve, optimize, translate — `improve_text(text, context)`
+### Rewrite — `rewrite_cv(cv_content, action, target_language, job_description)`
 
-`improvement.py`. One function serves three frontend actions. It decides what to do by searching the
-lower-cased `context` string for keywords:
+`rewrite.py`, behind `POST /ai/rewrite`. `action` is a validated enum, so the mode can only be what
+the client asked for:
 
-| Detected when `context` contains | Mode |
+| `action` | System prompt intent |
 | :--- | :--- |
-| `translate` | Translation |
-| `optimize` **and** `, jd: ` followed by text | Job-targeted optimisation |
-| otherwise | General rewrite ("enhance") |
+| `enhance` | More professional, impactful, metric-driven wording with strong action verbs; keep the meaning and the number of items |
+| `optimize` | Weave the job description's keywords into summary, experience and skills; preserve content; never invent experience. Requires `job_description` |
+| `translate` | 1:1 translation into the target language; keep the exact number of items; do not translate proper names |
 
-- **Target language** comes from `lang: es` / `lang: en` / `lang: pt`; otherwise "the original
-  language of the input".
-- **Job description** is everything after the first `jd: `. It is interpolated into the **system
-  prompt**.
-- **JSON mode**: if `text` starts with `{`, an instruction is appended to return the same JSON
-  structure and the call uses `response_format={"type": "json_object"}`.
+All modes add the same JSON rules: return only a JSON object with the same structure and keys,
+keep ids, dates and URLs, and leave `[REDACTED_PII]` values untouched. The call uses
+`response_format={"type": "json_object"}`.
 
-The frontend always sends the whole CV as JSON in `text` and
-`"Action: <action>, Lang: <lang>, JD: <jd>"` in `context`, then parses `improved_text` and merges
-it defensively over the user's data (see the frontend's `docs/auth-billing-ai.md`).
+Flow: mask → call → `json.loads` → must be an object (else `AIResponseError` → `502`) →
+`restore_cv_pii` → `{ "cv": … }`.
 
-System prompt intent per mode:
+The frontend merges the result over the user's data defensively (see the frontend's
+`docs/auth-billing-ai.md`), so a model that drops a section cannot erase it.
 
-- *Translation* — 1:1 translation into the target language, keep the exact number of items in every
-  section, do not translate proper names.
-- *Optimisation* — weave the job description's keywords into summary, experience and skills;
-  preserve content; respond entirely in the target language.
-- *Enhance* — more professional, impactful, metric-driven wording with strong action verbs; keep
-  the meaning.
+`POST /ai/improve` is a deprecated shim: it parses the old `"Action: …, Lang: …, JD: …"` context
+string with a strict regular expression and calls the same `rewrite_cv`.
 
-### ATS simulation — `simulate_ats(cv_data, job_description)`
+### ATS simulation — `simulate_ats(cv_data, job_description, language)`
 
-`ats.py`. Masks PII, then asks for a JSON object with a fixed structure (score, interview
-probability, tier, per-requirement analysis, missing keywords, improvement actions) in JSON mode.
-Returns `json.loads` of the reply without validating it. The output language is not specified, so
-the analysis comes back in whatever language the model chooses.
+`ats.py`. Masks the CV and asks, in JSON mode, for a fixed structure (score, interview probability,
+tier, per-requirement analysis, missing keywords, improvement actions). With `language`, free-text
+values are requested in that language while `status` values stay `match | missing | partial`
+(the frontend switches on them). The parsed object is returned as is.
 
-### Cover letter — `generate_cover_letter(cv_data, job_description)`
+### Cover letter — `generate_cover_letter(cv_data, job_description, language)`
 
-`cover_letter.py`. The interesting part is how it keeps contact details away from the model:
+`cover_letter.py`:
 
 1. Read `name`, `email`, `phone`, `city` from the **unmasked** CV.
-2. Mask the CV and ask the model for the letter **body only**, starting at the salutation.
-3. Build the header in Python — name, city, email, phone, today's date — and prepend it.
-
-The date is formatted `%B %d, %Y` in the server's locale (English month names) regardless of the
-CV's language. The letter's language is not specified in the prompt.
-
-`translation.py` contains a standalone `translate_text` helper that nothing calls.
+2. Mask the CV and ask the model for the letter **body only**, starting at the salutation
+   (in `language` if given).
+3. Build the header in Python — name, city, email, phone (those that exist) and today's date as
+   `YYYY-MM-DD` — and prepend it.
 
 ## Error handling
 
-Each router handler catches every exception, prints a traceback and responds `500` with
-`str(exception)` as `detail`. Consequences:
+`ai_errors()` in `routers/ai.py` wraps each call:
 
-- A non-Pro caller gets `500` (`"403: This feature requires a Pro subscription."`) instead of `403`.
-- Provider errors, including text returned by the OpenAI SDK, are passed through to the client.
+| Raised inside | Response | Logged |
+| :--- | :--- | :--- |
+| `HTTPException` | passed through unchanged | — |
+| `AINotConfiguredError` | `503`, generic detail | error |
+| anything else (provider error, bad JSON, …) | `502`, generic detail | full traceback |
+
+Provider messages never reach the client. Look in the server log for the cause.
 
 ## Changing things
 
 | Task | Where |
 | :--- | :--- |
-| Switch model or provider | `get_ai_client` in `base.py`; or pass `provider="deepseek"` from a service |
-| Edit a prompt | The `system_prompt` in the relevant service file |
-| Mask more fields | `fields_to_redact` in `sanitizer.py` — and extend `test/test_sanitizer.py` |
-| Add an AI endpoint | A function in `services/ai/`, a request schema in `schemas/ai_schemas.py`, a route in `routers/ai.py` calling `check_pro_status` first, and a client method in the frontend's `src/lib/api.ts` |
+| Switch model | `OPENAI_MODEL` setting |
+| Switch provider | `get_ai_client` in `base.py` |
+| Edit a prompt | `build_system_prompt` in `rewrite.py`, or the `system_prompt` in `ats.py` / `cover_letter.py` |
+| Mask more fields | `PERSONAL_FIELDS_TO_REDACT` in `sanitizer.py` (masking and restoring both use it) — extend `test/test_sanitizer.py` |
+| Change limits | `AI_RATE_LIMIT_PER_HOUR` / `AI_RATE_LIMIT_PER_DAY` settings |
+| Add an AI endpoint | A function in `services/ai/` (mask first), a request schema in `schemas/ai_schemas.py` with size limits, a route in `routers/ai.py` using `Depends(enforce_ai_quota)` and `async with ai_errors(...)`, a test in `test/test_ai.py` with `FakeOpenAI`, and a client method in the frontend's `src/lib/api.ts` |
