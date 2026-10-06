@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -97,15 +98,26 @@ async def process_webhook_event(payload: bytes, sig_header: str, db: AsyncSessio
         )
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_WEBHOOK_SECRET)
-    except ValueError:
-        # Invalid payload
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload") from None
+        # Signature and timestamp check only; raises if the payload was not sent by Stripe.
+        # The event itself is read from the verified JSON below, as plain dicts, so the handlers
+        # do not depend on the SDK's object model (newer SDK versions return objects without
+        # dict methods such as .get()).
+        body = payload.decode("utf-8")
+        stripe.WebhookSignature.verify_header(
+            body, sig_header, settings.STRIPE_WEBHOOK_SECRET, stripe.Webhook.DEFAULT_TOLERANCE
+        )
+        event = json.loads(body)
     except stripe.SignatureVerificationError:
         # Invalid signature
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature") from None
+    except ValueError:
+        # Invalid payload
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload") from None
 
-    event_type = event["type"]
+    if not isinstance(event, dict) or not isinstance((event.get("data") or {}).get("object"), dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+
+    event_type = event.get("type")
     obj = event["data"]["object"]
 
     if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
