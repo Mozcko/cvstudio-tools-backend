@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from src.models.payment import Payment
 from src.models.promo import PromoCode
 from src.models.user import User
+from test.stripe_helpers import signed_stripe_request
 
 USER = "user_test_1"
 
@@ -17,11 +18,9 @@ async def get_user(db, user_id=USER):
 
 
 @pytest.fixture
-def stripe_event(monkeypatch):
-    """Lets a test choose the event Stripe 'sends'; signature checking is stubbed out."""
-    holder = {}
-    monkeypatch.setattr(stripe.Webhook, "construct_event", lambda payload, sig, secret: holder["event"])
-    return holder
+def stripe_event():
+    """Lets a test choose the event Stripe 'sends'. Requests are really signed and really verified."""
+    return {}
 
 
 def checkout_event(session_id="cs_1", plan="30", payment_status="paid", payment_intent="pi_1"):
@@ -39,8 +38,9 @@ def checkout_event(session_id="cs_1", plan="30", payment_status="paid", payment_
     }
 
 
-async def send_webhook(client):
-    return await client.post("/api/v1/webhooks/stripe", content=b"{}", headers={"Stripe-Signature": "t=1,v1=x"})
+async def send_webhook(client, holder=None):
+    body, headers = signed_stripe_request((holder or {}).get("event", {}))
+    return await client.post("/api/v1/webhooks/stripe", content=body, headers=headers)
 
 
 async def test_stripe_webhook_requires_signature_header(client):
@@ -49,17 +49,32 @@ async def test_stripe_webhook_requires_signature_header(client):
 
 
 async def test_stripe_webhook_rejects_bad_signature(client):
-    response = await send_webhook(client)
+    body, _ = signed_stripe_request(checkout_event())
+    forged = {"Stripe-Signature": "t=1,v1=" + "0" * 64}
+    assert (await client.post("/api/v1/webhooks/stripe", content=body, headers=forged)).status_code == 400
+
+    # Signed with a different secret
+    body, headers = signed_stripe_request(checkout_event(), secret="whsec_someone_else")
+    assert (await client.post("/api/v1/webhooks/stripe", content=body, headers=headers)).status_code == 400
+
+
+async def test_tampered_stripe_body_is_rejected(client, db):
+    _, headers = signed_stripe_request(checkout_event(plan="7"))
+    tampered, _ = signed_stripe_request(checkout_event(plan="lifetime"))
+
+    response = await client.post("/api/v1/webhooks/stripe", content=tampered, headers=headers)
+
     assert response.status_code == 400
+    assert await get_user(db) is None
 
 
 async def test_checkout_grants_pro_once(client, db, stripe_event):
     stripe_event["event"] = checkout_event()
 
-    assert (await send_webhook(client)).status_code == 200
+    assert (await send_webhook(client, stripe_event)).status_code == 200
     first_expiry = (await get_user(db)).pro_expires_at
     # Stripe retries the same event
-    assert (await send_webhook(client)).status_code == 200
+    assert (await send_webhook(client, stripe_event)).status_code == 200
 
     user = await get_user(db)
     assert user.is_pro
@@ -70,9 +85,9 @@ async def test_checkout_grants_pro_once(client, db, stripe_event):
 
 async def test_second_purchase_extends_instead_of_overwriting(client, db, stripe_event):
     stripe_event["event"] = checkout_event("cs_1", "30", payment_intent="pi_1")
-    await send_webhook(client)
+    await send_webhook(client, stripe_event)
     stripe_event["event"] = checkout_event("cs_2", "7", payment_intent="pi_2")
-    await send_webhook(client)
+    await send_webhook(client, stripe_event)
 
     user = await get_user(db)
     assert abs(user.pro_expires_at - (datetime.now(UTC) + timedelta(days=37))) < timedelta(minutes=1)
@@ -81,22 +96,22 @@ async def test_second_purchase_extends_instead_of_overwriting(client, db, stripe
 async def test_unpaid_session_grants_nothing(client, db, stripe_event):
     stripe_event["event"] = checkout_event(payment_status="unpaid")
 
-    assert (await send_webhook(client)).status_code == 200
+    assert (await send_webhook(client, stripe_event)).status_code == 200
 
     assert await get_user(db) is None
 
 
 async def test_refund_revokes_the_grant(client, db, stripe_event):
     stripe_event["event"] = checkout_event("cs_1", "lifetime", payment_intent="pi_life")
-    await send_webhook(client)
+    await send_webhook(client, stripe_event)
     assert (await get_user(db)).is_pro
 
     stripe_event["event"] = {
         "type": "charge.refunded",
         "data": {"object": {"id": "ch_1", "refunded": True, "payment_intent": "pi_life"}},
     }
-    await send_webhook(client)
-    await send_webhook(client)  # retried delivery must not revoke twice
+    await send_webhook(client, stripe_event)
+    await send_webhook(client, stripe_event)  # retried delivery must not revoke twice
 
     user = await get_user(db)
     assert not user.is_pro

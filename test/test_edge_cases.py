@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-import stripe
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt.exceptions import PyJWKClientConnectionError
@@ -21,6 +20,7 @@ from src.models.user import User
 from src.services.ai import ats, base, cover_letter, rewrite
 from src.services.ai.base import AINotConfiguredError, AIResponseError
 from src.utils.sanitizer import mask_cv_pii, restore_cv_pii
+from test.stripe_helpers import signed_stripe_request
 
 USER = "user_test_1"
 CV = {"personal": {"name": "Jane", "email": "jane@example.com", "socials": []}}
@@ -215,20 +215,13 @@ def test_mask_ignores_malformed_socials():
 
 
 @pytest.fixture
-def stripe_event(monkeypatch):
-    holder = {}
-
-    def construct(payload, sig, secret):
-        if isinstance(holder["event"], Exception):
-            raise holder["event"]
-        return holder["event"]
-
-    monkeypatch.setattr(stripe.Webhook, "construct_event", construct)
-    return holder
+def stripe_event():
+    return {}
 
 
-async def post_stripe(client):
-    return await client.post("/api/v1/webhooks/stripe", content=b"{}", headers={"Stripe-Signature": "t=1,v1=x"})
+async def post_stripe(client, holder):
+    body, headers = signed_stripe_request(holder["event"])
+    return await client.post("/api/v1/webhooks/stripe", content=body, headers=headers)
 
 
 def session_event(**overrides):
@@ -244,11 +237,15 @@ def session_event(**overrides):
 
 
 async def test_stripe_webhook_configuration_and_payload_errors(client, stripe_event, monkeypatch):
-    stripe_event["event"] = ValueError("bad payload")
-    assert (await post_stripe(client)).status_code == 400
+    # Correctly signed, but not an event we can read
+    for garbage in ("this is not json", "[1, 2, 3]", '{"type": "x", "data": {"object": "nope"}}'):
+        stripe_event["event"] = garbage
+        assert (await post_stripe(client, stripe_event)).status_code == 400
 
+    # Sign while the secret exists, then send to a server that has none configured
+    body, headers = signed_stripe_request(session_event())
     monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", None)
-    assert (await post_stripe(client)).status_code == 500
+    assert (await client.post("/api/v1/webhooks/stripe", content=body, headers=headers)).status_code == 500
 
 
 @pytest.mark.parametrize(
@@ -262,7 +259,7 @@ async def test_stripe_webhook_configuration_and_payload_errors(client, stripe_ev
 async def test_unusable_checkout_sessions_are_ignored(client, db, stripe_event, overrides):
     stripe_event["event"] = session_event(**overrides)
 
-    assert (await post_stripe(client)).status_code == 200
+    assert (await post_stripe(client, stripe_event)).status_code == 200
 
     assert (await db.execute(select(func.count()).select_from(Payment))).scalar() == 0
     assert (await db.execute(select(func.count()).select_from(User))).scalar() == 0
@@ -272,7 +269,7 @@ async def test_user_id_can_come_from_metadata(client, db, stripe_event):
     stripe_event["event"] = session_event(
         client_reference_id=None, metadata={"plan_duration": "7", "user_id": "user_meta"}
     )
-    await post_stripe(client)
+    await post_stripe(client, stripe_event)
 
     user = (await db.execute(select(User).where(User.id == "user_meta"))).scalar_one()
     assert user.is_pro
@@ -280,7 +277,7 @@ async def test_user_id_can_come_from_metadata(client, db, stripe_event):
 
 async def test_refunds_that_do_not_apply_change_nothing(client, db, stripe_event):
     stripe_event["event"] = session_event()
-    await post_stripe(client)
+    await post_stripe(client, stripe_event)
 
     for charge in (
         {"refunded": False, "payment_intent": "pi_1"},  # partial refund
@@ -288,10 +285,10 @@ async def test_refunds_that_do_not_apply_change_nothing(client, db, stripe_event
         {"refunded": True, "payment_intent": "pi_unknown"},
     ):
         stripe_event["event"] = {"type": "charge.refunded", "data": {"object": charge}}
-        assert (await post_stripe(client)).status_code == 200
+        assert (await post_stripe(client, stripe_event)).status_code == 200
 
     stripe_event["event"] = {"type": "customer.created", "data": {"object": {}}}
-    assert (await post_stripe(client)).status_code == 200
+    assert (await post_stripe(client, stripe_event)).status_code == 200
 
     user = (
         await db.execute(select(User).where(User.id == USER).execution_options(populate_existing=True))
