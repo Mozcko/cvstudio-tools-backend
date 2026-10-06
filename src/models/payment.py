@@ -1,9 +1,12 @@
-from sqlalchemy import Column, String, Integer, DateTime
+from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.sql import func
+
 from src.db.database import Base
+
 
 class Payment(Base):
     """One row per completed Stripe Checkout session. Kept after the user is deleted."""
+
     __tablename__ = "payments"
 
     session_id = Column(String, primary_key=True)  # Stripe Checkout Session ID

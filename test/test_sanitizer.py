@@ -1,5 +1,6 @@
 from src.utils.sanitizer import mask_cv_pii, restore_cv_pii
 
+
 def make_cv():
     return {
         "personal": {
@@ -10,17 +11,18 @@ def make_cv():
             "city": "Mexico City",
             "socials": [
                 {"network": "LinkedIn", "url": "https://linkedin.com/in/janedoe"},
-                {"network": "GitHub", "url": "https://github.com/janedoe"}
-            ]
+                {"network": "GitHub", "url": "https://github.com/janedoe"},
+            ],
         },
         "experience": [
             {
                 "company": "Tech Corp",
                 "role": "Lead Developer",
-                "description": ["Led a team of 10", "Built scalable APIs"]
+                "description": ["Led a team of 10", "Built scalable APIs"],
             }
-        ]
+        ],
     }
+
 
 def test_mask_cv_pii_removes_sensitive_data():
     """
@@ -46,10 +48,12 @@ def test_mask_cv_pii_removes_sensitive_data():
     # Verify Deep Copy (original unchanged)
     assert mock_cv_data["personal"]["email"] == "jane.doe@example.com"
 
+
 def test_mask_tolerates_missing_or_odd_personal():
     assert mask_cv_pii({}) == {}
     assert mask_cv_pii({"personal": None}) == {"personal": None}
     assert mask_cv_pii({"mode": "markdown", "markdown": "# x"}) == {"mode": "markdown", "markdown": "# x"}
+
 
 def test_restore_round_trip():
     original = make_cv()
@@ -67,6 +71,7 @@ def test_restore_round_trip():
     ]
     assert restored["personal"]["role"] == "Staff Engineer"
     assert "[REDACTED_PII]" not in str(restored)
+
 
 def test_restore_overrides_values_the_model_invented():
     original = make_cv()

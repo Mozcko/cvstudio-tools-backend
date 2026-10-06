@@ -1,29 +1,26 @@
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
-from fastapi import APIRouter, Request, Header, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from svix.webhooks import Webhook, WebhookVerificationError
 
 from src.api.dependencies import get_db
 from src.core.config import settings
-from src.services.stripe_service import process_webhook_event
-from src.models.user import User
 from src.models.cv import CV
+from src.models.user import User
+from src.services.stripe_service import process_webhook_event
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
+
 @router.post("/stripe")
-async def stripe_webhook(
-    request: Request,
-    stripe_signature: str = Header(None),
-    db: AsyncSession = Depends(get_db)
-):
+async def stripe_webhook(request: Request, stripe_signature: str = Header(None), db: AsyncSession = Depends(get_db)):
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
 
@@ -35,7 +32,8 @@ async def stripe_webhook(
 
     return result
 
-def _primary_email(data: Dict[str, Any]) -> Optional[str]:
+
+def _primary_email(data: dict[str, Any]) -> str | None:
     addresses = data.get("email_addresses") or []
     primary_id = data.get("primary_email_address_id")
     for address in addresses:
@@ -46,11 +44,9 @@ def _primary_email(data: Dict[str, Any]) -> Optional[str]:
             return address["email_address"]
     return None
 
+
 @router.post("/clerk")
-async def clerk_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
+async def clerk_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Handles Clerk webhooks (delivered through Svix, which signs every request).
     - 'user.created' / 'user.updated': keep the user's email in sync.
@@ -58,19 +54,20 @@ async def clerk_webhook(
     """
     if not settings.CLERK_WEBHOOK_SECRET:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Clerk webhook secret not configured"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Clerk webhook secret not configured"
         )
 
     raw_body = await request.body()
     try:
         Webhook(settings.CLERK_WEBHOOK_SECRET).verify(raw_body, dict(request.headers))
-    except WebhookVerificationError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
-
-    try:
         payload = json.loads(raw_body)
+    except WebhookVerificationError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature") from None
     except ValueError:
+        # Correctly signed but not JSON (the Svix library also parses the body)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload") from None
+
+    if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
 
     event_type = payload.get("type")

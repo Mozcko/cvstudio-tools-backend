@@ -1,0 +1,9 @@
+# Everyone listed here is asked to review pull requests that touch the matching paths.
+*                       @Mozcko
+
+# Changes here affect authentication, billing or the deploy pipeline: review with extra care.
+/src/core/              @Mozcko
+/src/services/pro.py    @Mozcko
+/src/services/stripe_service.py @Mozcko
+/migrations/            @Mozcko
+/.github/               @Mozcko

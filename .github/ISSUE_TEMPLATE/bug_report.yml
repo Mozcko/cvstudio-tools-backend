@@ -1,0 +1,52 @@
+name: 🐛 Bug report
+description: Something in the API behaves incorrectly
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security problems here.** Use *Security → Report a vulnerability* instead (see SECURITY.md).
+        Remove tokens, emails and other personal data from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the endpoint, the status code and the response body.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. POST /api/v1/...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - Local (docker compose)
+        - Production
+        - Tests / CI
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: e.g. 59ec401

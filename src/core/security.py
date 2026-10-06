@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
-_jwks_client: Optional[PyJWKClient] = None
+_jwks_client: PyJWKClient | None = None
 
 
 def _get_jwks_client() -> PyJWKClient:
@@ -27,7 +27,7 @@ def _get_jwks_client() -> PyJWKClient:
     return _jwks_client
 
 
-def decode_clerk_token(token: str) -> Dict[str, Any]:
+def decode_clerk_token(token: str) -> dict[str, Any]:
     """Verifies a Clerk session token and returns its claims."""
     signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
     payload = jwt.decode(
@@ -53,10 +53,10 @@ def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(secu
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable",
-        )
+        ) from None
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
-        )
+        ) from None
     return payload["sub"]

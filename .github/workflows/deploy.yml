@@ -1,0 +1,104 @@
+name: Deploy
+
+# Deploys to Railway after CI has passed on main, or on demand.
+#
+# One-time setup (see CONTRIBUTING.md > Deployment):
+#   Repository secret    RAILWAY_TOKEN    Railway project token for the production environment
+#   Repository variable  RAILWAY_SERVICE  Name or id of the backend service in Railway
+#   Repository variable  BACKEND_URL      Public URL of the backend, e.g. https://api.cvstudio.tools
+#   Environment          production       Add required reviewers to approve each deploy
+# And disable Railway's own GitHub auto-deploy for the service, or every commit deploys twice.
+
+on:
+  workflow_run:
+    workflows: [ CI ]
+    types: [ completed ]
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, tag or branch to deploy (default main)
+        required: false
+        default: main
+
+# Never run two deploys at once, and never cancel one halfway
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: 🔎 Preflight
+    # Only after a successful CI run for a push to main (not for pull requests)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+      ref: ${{ steps.check.outputs.ref }}
+    steps:
+      - name: Check configuration
+        id: check
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+          REF: ${{ github.event.workflow_run.head_sha || inputs.ref || github.sha }}
+        run: |
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          if [ -z "$RAILWAY_TOKEN" ] || [ -z "$RAILWAY_SERVICE" ]; then
+            echo "::warning::Deploy skipped: set the RAILWAY_TOKEN secret and the RAILWAY_SERVICE variable (see CONTRIBUTING.md)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: 🚀 Deploy to Railway
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    # Required reviewers on this environment turn each deploy into a manual approval
+    environment:
+      name: production
+      url: ${{ vars.BACKEND_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install the Railway CLI
+        run: npm install --global @railway/cli
+
+      # Uploads this checkout; Railway builds the Dockerfile and starts scripts/start.sh,
+      # which applies the database migrations before serving.
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+        run: railway up --ci --service "$RAILWAY_SERVICE"
+
+      - name: Smoke test the live service
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
+        run: |
+          if [ -z "$BACKEND_URL" ]; then
+            echo "::warning::BACKEND_URL variable is not set; skipping the post-deploy check."
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$BACKEND_URL/health" | grep -q '"healthy"'; then
+              echo "Live service is healthy (attempt $attempt)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$BACKEND_URL/health did not report healthy within 5 minutes. Check the Railway deployment and roll back if needed."
+          exit 1

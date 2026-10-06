@@ -1,6 +1,9 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_DEV: "true"   # include pytest, ruff, pip-audit
     ports:
       - "8000:8000"
     volumes:

@@ -71,13 +71,14 @@ A user who never comes back keeps `is_pro = true` in the table after their pass 
 that counts Pro users must also check `pro_expires_at`.
 
 ### 13. Tests need PostgreSQL and wipe it — Read
-There is no SQLite fallback (the models use `JSONB`/`UUID`). Database-backed tests are *skipped*
-when no database is reachable, which can make a run look green. And they drop every table in the
-database they are pointed at.
+There is no SQLite fallback (the models use `JSONB`/`UUID`). Locally, database-backed tests are
+*skipped* when no database is reachable (CI fails on skips), and they drop every table in the
+database they are pointed at. `make test` uses a dedicated `cvstudio_test` database.
 
-### 14. No CI workflow in this repo — Read
-The frontend repo's workflow has a backend job written for a different layout. Nothing runs these
-tests automatically.
+### 14. The deploy workflow has not run against Railway — Not exercised
+`deploy.yml` skips itself until the `RAILWAY_TOKEN` secret and `RAILWAY_SERVICE` variable exist,
+so its `railway up` step has never executed. Watch the first real run, and disable Railway's own
+GitHub auto-deploy at the same time or commits deploy twice.
 
 ### 15. No connection-pool or timeout tuning — Read
 The SQLAlchemy engine and the OpenAI client use library defaults; a slow provider call holds a
@@ -111,3 +112,5 @@ For reference when reading old notes or commits.
 | Operations | Production entrypoint without `--reload`, honours `$PORT`; SQL echo off by default; structured logging |
 | Scripts | `upgrade_user.py` supports `--days` and uses the shared grant logic |
 | Cleanup | DeepSeek wiring, unused modules, debug scripts and unused dependencies removed |
+| Dependencies | FastAPI/Starlette, PyJWT and the OpenAI SDK upgraded to versions without known vulnerabilities; audited in CI |
+| Pipeline | CI (lint, tests with 95% coverage floor, migrations, Docker smoke test, audit), CodeQL, Dependabot, gated deploy workflow |

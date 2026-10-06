@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from svix.webhooks import Webhook
@@ -15,7 +15,7 @@ def signed(payload: dict, secret: str = None):
     """Body and headers exactly as Svix (Clerk's webhook transport) would send them."""
     body = json.dumps(payload)
     msg_id = "msg_test_1"
-    timestamp = datetime.now(timezone.utc)
+    timestamp = datetime.now(UTC)
     signature = Webhook(secret or settings.CLERK_WEBHOOK_SECRET).sign(msg_id, timestamp, body)
     headers = {
         "svix-id": msg_id,
@@ -85,17 +85,19 @@ async def test_signed_user_deleted_purges_data(client, db):
 
 
 async def test_user_created_stores_primary_email(client, db):
-    body, headers = signed({
-        "type": "user.created",
-        "data": {
-            "id": USER,
-            "primary_email_address_id": "idn_2",
-            "email_addresses": [
-                {"id": "idn_1", "email_address": "old@example.com"},
-                {"id": "idn_2", "email_address": "jane@example.com"},
-            ],
-        },
-    })
+    body, headers = signed(
+        {
+            "type": "user.created",
+            "data": {
+                "id": USER,
+                "primary_email_address_id": "idn_2",
+                "email_addresses": [
+                    {"id": "idn_1", "email_address": "old@example.com"},
+                    {"id": "idn_2", "email_address": "jane@example.com"},
+                ],
+            },
+        }
+    )
 
     response = await client.post("/api/v1/webhooks/clerk", content=body, headers=headers)
 

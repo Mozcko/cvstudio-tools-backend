@@ -2,18 +2,19 @@
 
 ## Stack
 
-| Concern | Choice | Version pinned in `requirements.txt` |
+| Concern | Choice | Pinned version |
 | :--- | :--- | :--- |
-| Web framework | FastAPI on Uvicorn | 0.111.0 / 0.30.1 |
+| Web framework | FastAPI on Uvicorn | 0.142.2 / 0.30.1 |
 | Database | PostgreSQL 15 | — |
 | ORM | SQLAlchemy 2 (async) with `asyncpg` | 2.0.31 / 0.29.0 |
 | Migrations | Alembic (async env) | 1.13.1 |
 | Settings | `pydantic-settings` | 2.3.4 |
-| Auth | Clerk session JWTs, verified with `PyJWT[crypto]` | 2.8.0 |
+| Auth | Clerk session JWTs, verified with `PyJWT[crypto]` | 2.15.1 |
 | Clerk webhooks | `svix` | 1.24.0 |
 | Payments | `stripe` | 10.1.0 |
-| AI | `openai` SDK (`AsyncOpenAI`) | 1.35.10 |
-| Tests | `pytest`, `pytest-asyncio`, `httpx`, `pytest-mock` | — |
+| AI | `openai` SDK (`AsyncOpenAI`), with `httpx` pinned to match | 1.109.1 / 0.28.1 |
+| Tests | `pytest`, `pytest-asyncio`, `pytest-cov`, `pytest-mock` | `requirements-dev.txt` |
+| Lint / format / audit | `ruff`, `pip-audit` | `requirements-dev.txt` |
 | Runtime | Python 3.11 (Docker image `python:3.11-slim`) | — |
 
 ## Directory map
@@ -48,6 +49,12 @@ scripts/start.sh            Production entrypoint: migrate, then serve on $PORT
 test/                       pytest suite (needs PostgreSQL)
 create_promo.py             CLI: create a promo code
 Dockerfile, docker-compose.yml
+requirements.txt            Runtime dependencies (production image)
+requirements-dev.txt        + test, lint and audit tools
+pyproject.toml              ruff, pytest and coverage configuration
+Makefile                    Everyday tasks (`make help`)
+.github/                    CI, deploy and security workflows; templates; Dependabot
+CONTRIBUTING.md, SECURITY.md
 GEMINI.md                   Context file for the Gemini CLI agent
 ```
 

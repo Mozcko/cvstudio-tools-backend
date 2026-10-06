@@ -1,31 +1,29 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
 import stripe
+from fastapi import APIRouter, Depends, HTTPException, status
+
 from src.api.dependencies import get_current_user
-from src.schemas.billing_schemas import CheckoutRequest, CheckoutResponse
 from src.core.config import settings
+from src.schemas.billing_schemas import CheckoutRequest, CheckoutResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
+
 @router.post("/create-checkout-session", response_model=CheckoutResponse)
-async def create_checkout_session(
-    request: CheckoutRequest,
-    user_id: str = Depends(get_current_user)
-):
+async def create_checkout_session(request: CheckoutRequest, user_id: str = Depends(get_current_user)):
     price_id = {
         "7": settings.STRIPE_PRICE_7D,
         "30": settings.STRIPE_PRICE_30D,
-        "lifetime": settings.STRIPE_PRICE_LIFETIME
+        "lifetime": settings.STRIPE_PRICE_LIFETIME,
     }.get(request.plan_type)
 
     if not price_id or not settings.STRIPE_API_KEY:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="This plan is not available right now."
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="This plan is not available right now."
         )
 
     try:
@@ -39,19 +37,16 @@ async def create_checkout_session(
                     "quantity": 1,
                 },
             ],
-            mode='payment',
+            mode="payment",
             client_reference_id=user_id,
-            metadata={
-                "plan_duration": request.plan_type
-            },
+            metadata={"plan_duration": request.plan_type},
             success_url=f"{settings.FRONTEND_URL}/app/dashboard?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{settings.FRONTEND_URL}/app/dashboard",
         )
     except Exception:
         logger.exception("Could not create Stripe Checkout session")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not start the checkout. Please try again."
-        )
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not start the checkout. Please try again."
+        ) from None
 
     return CheckoutResponse(url=checkout_session.url)

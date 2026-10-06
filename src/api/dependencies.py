@@ -1,6 +1,6 @@
 import math
-from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import func, select
@@ -14,14 +14,13 @@ from src.models.ai_request import AIRequest
 from src.models.user import User
 from src.services.pro import apply_expiry
 
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
-async def get_current_user_obj(
-    user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
-) -> User:
+
+async def get_current_user_obj(user_id: str = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)) -> User:
     """Returns the caller's user row, creating it on first sight and applying Pro expiry."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -41,24 +40,22 @@ async def get_current_user_obj(
 
     return user
 
+
 async def get_current_user(user: User = Depends(get_current_user_obj)) -> str:
     return user.id
 
+
 async def require_pro(user: User = Depends(get_current_user_obj)) -> User:
     if not user.is_pro:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This feature requires a Pro subscription."
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This feature requires a Pro subscription.")
     return user
 
+
 async def enforce_ai_quota(
-    request: Request,
-    user: User = Depends(require_pro),
-    db: AsyncSession = Depends(get_db)
+    request: Request, user: User = Depends(require_pro), db: AsyncSession = Depends(get_db)
 ) -> User:
     """Pro-only + per-user rate limit for AI endpoints. Records the call when accepted."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     windows = (
         (timedelta(hours=1), settings.AI_RATE_LIMIT_PER_HOUR),
         (timedelta(days=1), settings.AI_RATE_LIMIT_PER_DAY),
@@ -69,8 +66,9 @@ async def enforce_ai_quota(
             continue
         since = now - window
         result = await db.execute(
-            select(func.count(), func.min(AIRequest.created_at))
-            .where(AIRequest.user_id == user.id, AIRequest.created_at >= since)
+            select(func.count(), func.min(AIRequest.created_at)).where(
+                AIRequest.user_id == user.id, AIRequest.created_at >= since
+            )
         )
         count, oldest = result.one()
         if count >= limit:

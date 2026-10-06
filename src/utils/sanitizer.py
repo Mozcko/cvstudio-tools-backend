@@ -1,10 +1,11 @@
 import copy
-from typing import Any, Dict
+from typing import Any
 
 REDACTED = "[REDACTED_PII]"
 PERSONAL_FIELDS_TO_REDACT = ["email", "phone", "city", "address"]
 
-def mask_cv_pii(cv_data: Dict[str, Any]) -> Dict[str, Any]:
+
+def mask_cv_pii(cv_data: dict[str, Any]) -> dict[str, Any]:
     """
     Deeply copies the CV data and redacts sensitive PII fields
     before sending to external LLM services.
@@ -27,7 +28,8 @@ def mask_cv_pii(cv_data: Dict[str, Any]) -> Dict[str, Any]:
 
     return sanitized_data
 
-def restore_cv_pii(original: Dict[str, Any], processed: Dict[str, Any]) -> Dict[str, Any]:
+
+def restore_cv_pii(original: dict[str, Any], processed: dict[str, Any]) -> dict[str, Any]:
     """
     Puts the fields redacted by `mask_cv_pii` back into data returned by the LLM,
     taking the real values from the original CV. Returns a new dict.
@@ -56,7 +58,7 @@ def restore_cv_pii(original: Dict[str, Any], processed: Dict[str, Any]) -> Dict[
             and all(isinstance(s, dict) for s in socials)
         )
         if same_shape:
-            for social, original_social in zip(socials, original_socials):
+            for social, original_social in zip(socials, original_socials, strict=False):
                 if isinstance(original_social, dict) and "url" in original_social:
                     social["url"] = original_social["url"]
         else:
