@@ -6,7 +6,7 @@ asyncpg==0.29.0
 alembic==1.13.1
 pydantic-settings==2.3.4
 PyJWT[crypto]==2.15.1
-svix==1.24.0
+svix==2.6.1
 stripe==10.1.0
 openai==1.109.1
 # Used by the OpenAI SDK (and the tests). Pinned because SDK and httpx versions must match.
