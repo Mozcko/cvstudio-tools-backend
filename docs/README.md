@@ -28,7 +28,7 @@ folder. It calls this API directly from the browser with a Clerk session token.
 | [auth-plans-billing.md](./auth-plans-billing.md) | Work on authentication, the Pro lifecycle, Stripe or promo codes |
 | [ai-services.md](./ai-services.md) | Change prompts, models, PII masking or the AI endpoints |
 | [development.md](./development.md) | Run it locally, migrate the database, test, deploy, or use the admin scripts |
-| [known-issues.md](./known-issues.md) | See the security holes, bugs and traps found while documenting — **read this first** |
+| [known-issues.md](./known-issues.md) | See the bugs and traps found while documenting — **read this first** |
 
 ## Thirty-second mental model
 
@@ -48,8 +48,8 @@ Browser ── Bearer <Clerk JWT> ──▶ FastAPI  /api/v1
 
 ## The three facts that matter most
 
-- **Tokens are not verified.** The JWT signature check is switched off, so any caller can act as
-  any user. See [known-issues.md](./known-issues.md) item 1 before exposing this service.
+- **Identity comes from Clerk.** The user id is the `sub` claim of the Clerk session token; a
+  `users` row is created the first time an id is seen.
 - **Pro is a row, not a subscription.** `users.is_pro` plus `users.pro_expires_at` (null = lifetime).
   Expiry is applied lazily, the next time that user makes an authenticated request.
 - **Tables are created by the app, not by Alembic.** `Base.metadata.create_all` runs on startup; the

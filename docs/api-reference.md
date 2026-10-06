@@ -33,7 +33,7 @@ Errors always carry a `detail` field; the frontend's API client surfaces it as t
 | `POST` | `/billing/redeem` | ✅ | — | Redeem a promo code (older implementation) |
 | `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code (current implementation) |
 | `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed |
-| `POST` | `/webhooks/clerk` | **none** | — | User deleted |
+| `POST` | `/webhooks/clerk` | Clerk | — | User deleted |
 
 ## Health
 
@@ -236,5 +236,4 @@ Pro, with expiry now + 7 or 30 days, or no expiry for `lifetime`.
 ### `POST /webhooks/clerk`
 
 Called by Clerk. Reads the JSON body; on `type == "user.deleted"` deletes that user's CVs and then
-the user row. Always returns `{"status": "success"}`. **The request is not authenticated** — see
-[known-issues.md](./known-issues.md) item 2.
+the user row. Always returns `{"status": "success"}`.

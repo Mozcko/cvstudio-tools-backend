@@ -62,9 +62,8 @@ it. Full table in [architecture.md](./architecture.md#configuration-srccoreconfi
 
 `.env.example` omits `ENVIRONMENT` and the three `STRIPE_PRICE_*` variables; add them by hand.
 
-Because tokens are not verified, no Clerk configuration is needed locally. To call the API by hand
-you still need a token whose payload has a `sub`; the easiest source is the browser's network tab
-while using the frontend.
+To call the API by hand you need a Clerk session token; the easiest source is the browser's
+network tab while using the frontend.
 
 ## Database and migrations
 

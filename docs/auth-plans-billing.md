@@ -16,12 +16,6 @@ expiry check; today only `/users/me` uses it directly (and creates the row itsel
 Both return the user id as a **string**. A handler that needs `is_pro` must query `User` again, as
 `cv.py`, `ai.py` and the promo routes do.
 
-> **The token signature is not verified.** `security.py` calls
-> `jwt.decode(token, options={"verify_signature": False})`. Expiry, issuer and audience are not
-> checked either. Any party that can reach the API can mint a token with an arbitrary `sub`.
-> `CLERK_API_KEY` exists in the settings but nothing reads it. The fix is to verify against
-> Clerk's JWKS (RS256) — see [known-issues.md](./known-issues.md) item 1.
-
 ### User records
 
 There is no sign-up endpoint. A `users` row appears the first time a Clerk user id is seen, by

@@ -11,43 +11,10 @@ fixed. Confidence labels:
 
 Delete entries as they are resolved.
 
-## Security — fix before production traffic
+## Security
 
-### 1. JWT signatures are not verified — Read
-`src/core/security.py:17` decodes the bearer token with `options={"verify_signature": False}`.
-Signature, expiry, issuer and audience are all unchecked. Anyone who can reach the API can forge a
-token with any `sub` and then read, modify or delete that user's CVs, redeem codes for them, or use
-a Pro user's AI quota. The code comment acknowledges it is a placeholder.
-
-Fix: fetch Clerk's JWKS (`https://<clerk-frontend-api>/.well-known/jwks.json`, cached), and
-`jwt.decode(token, key, algorithms=["RS256"], …)` with expiry and issuer checks. `PyJWT` needs the
-`cryptography` package for RS256. `CLERK_API_KEY` is currently unused and is not what is needed
-for this.
-
-### 2. The Clerk webhook is unauthenticated — Read
-`POST /api/v1/webhooks/clerk` (`routers/webhooks.py:28`) trusts any JSON body. A single request
-`{"type":"user.deleted","data":{"id":"<clerk user id>"}}` permanently deletes that user's CVs and
-their user row (including Pro status). Clerk signs webhooks with Svix; the handler should verify
-the `svix-id`, `svix-timestamp` and `svix-signature` headers against the endpoint's signing secret.
-
-### 3. CV content is sent unmasked to OpenAI by `/ai/improve` — Read
-`mask_cv_pii` is applied in the ATS and cover-letter services but not in `improve_text`, which
-receives the CV as an opaque string. Enhance, optimize and translate therefore send email, phone,
-city and social URLs to the provider. The frontend's privacy page advertises automatic
-anonymisation. The candidate's name is not masked by any feature.
-
-### 4. Job descriptions are injected into the system prompt — Read
-`improvement.py:42` interpolates the user-supplied job description into the system message, and the
-whole `context` string is repeated in the user message. Combined with item 7, user text controls
-both the instructions and the mode selection.
-
-### 5. Internal errors are returned to clients — Read
-The AI handlers and `create-checkout-session` respond with `detail=str(e)`. Provider and Stripe
-error messages reach the browser verbatim.
-
-### 6. No rate limiting — Read
-Nothing bounds the number or size of AI requests per user; a Pro account (or, given item 1, anyone)
-can generate unbounded OpenAI cost.
+Security findings (items 1–6) are tracked privately, not in this public repository.
+Numbering below starts at 7 to keep existing references stable.
 
 ## Bugs
 
