@@ -25,6 +25,8 @@ async def test_me_creates_user_and_hides_internal_fields(client):
         "usage": {
             "free_ai": {"limit": 3, "remaining": 3, "resets_at": None},
             "free_imports": {"limit": 2, "remaining": 2, "resets_at": None},
+            "interviews_daily": {"limit": 3, "remaining": 3, "resets_at": None},
+            "interviews_monthly": {"limit": 30, "remaining": 30, "resets_at": None},
         },
     }
 

@@ -110,7 +110,7 @@ There is no scheduled job; expiry is applied lazily by `get_current_user_obj`.
 | More than `FREE_CV_LIMIT` (3) CVs | `POST /cvs/` — counted at creation time only |
 | More than `FREE_IMPORT_LIMIT` (2) AI imports | `POST /ai/import` — lifetime total for non-Pro users |
 | AI tools beyond the free allowance (below) | `require_pro` via `enforce_ai_quota`, or `reserve_rewrite` |
-| Premium features | `require_premium` — Active Hunt and Lifetime only |
+| Premium features: the voice mock interview (`/interviews`) | `require_premium` — Active Hunt and Lifetime only |
 
 ### What a free user gets
 

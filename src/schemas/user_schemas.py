@@ -16,6 +16,9 @@ class Usage(BaseModel):
 
     free_ai: Quota
     free_imports: Quota
+    # Mock interviews (premium plans): started in the last 24 hours / 30 days
+    interviews_daily: Quota
+    interviews_monthly: Quota
 
 
 class UserResponse(BaseModel):
