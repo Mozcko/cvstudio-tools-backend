@@ -13,6 +13,7 @@ from src.services.pro import apply_expiry
 from src.services.public_links import (
     find_public_link,
     is_bot,
+    key_from_ref,
     public_content,
     referrer_host,
     served_link_ids,
@@ -28,9 +29,15 @@ DEDUPE_WINDOW = timedelta(minutes=30)
 NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
-async def _online_link(slug: str, db: AsyncSession) -> tuple[PublicLink, User]:
-    """The link and its owner when the page is online; 404 in every other case, alike."""
-    link = await find_public_link(db, slug=slug)
+async def _online_link(ref: str, db: AsyncSession) -> tuple[PublicLink, User]:
+    """
+    The link and its owner when the page is online; 404 in every other case, alike.
+    `ref` is what follows /u/ in the address: "<name>-<key>", or the key alone.
+    """
+    key = key_from_ref(ref)
+    if not key:
+        raise NOT_FOUND
+    link = await find_public_link(db, key=key)
     if not link or not link.is_active:
         raise NOT_FOUND
     owner = (await db.execute(select(User).where(User.id == link.user_id))).scalar_one_or_none()
@@ -43,9 +50,9 @@ async def _online_link(slug: str, db: AsyncSession) -> tuple[PublicLink, User]:
     return link, owner
 
 
-@router.get("/cv/{slug}", response_model=PublicCV)
-async def read_public_cv(slug: str, response: Response, db: AsyncSession = Depends(get_db)):
-    link, owner = await _online_link(slug, db)
+@router.get("/cv/{ref}", response_model=PublicCV)
+async def read_public_cv(ref: str, response: Response, db: AsyncSession = Depends(get_db)):
+    link, owner = await _online_link(ref, db)
     cv = (await db.execute(select(CV).where(CV.id == link.cv_id))).scalar_one_or_none()
     if not cv:
         raise NOT_FOUND
@@ -53,6 +60,7 @@ async def read_public_cv(slug: str, response: Response, db: AsyncSession = Depen
     # Switching a link off, or hiding a phone number, should take effect quickly
     response.headers["Cache-Control"] = "public, max-age=60"
     return PublicCV(
+        key=link.key,
         slug=link.slug,
         title=cv.title,
         language=cv.language,
@@ -70,10 +78,10 @@ def _client_ip(request: Request) -> str:
     return forwarded.split(",")[0].strip() or (request.client.host if request.client else "")
 
 
-@router.post("/cv/{slug}/view", status_code=status.HTTP_204_NO_CONTENT)
-async def record_view(slug: str, request: Request, body: ViewIn | None = None, db: AsyncSession = Depends(get_db)):
+@router.post("/cv/{ref}/view", status_code=status.HTTP_204_NO_CONTENT)
+async def record_view(ref: str, request: Request, body: ViewIn | None = None, db: AsyncSession = Depends(get_db)):
     """Counts one visit. Stores no IP address and no full referrer."""
-    link, _ = await _online_link(slug, db)
+    link, _ = await _online_link(ref, db)
 
     user_agent = request.headers.get("user-agent", "")
     if is_bot(user_agent):

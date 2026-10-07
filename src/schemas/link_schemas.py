@@ -15,6 +15,8 @@ class LinkWrite(BaseModel):
 
 class LinkOut(BaseModel):
     cv_id: uuid.UUID
+    # The address is /u/<slug>-<key>
+    key: str
     slug: str
     is_active: bool
     # Switched on, but not online because the plan allows fewer links
@@ -26,13 +28,6 @@ class LinkOut(BaseModel):
     # Views since the owner last looked
     views_new: int
     created_at: datetime
-
-
-class SlugCheck(BaseModel):
-    slug: str
-    available: bool
-    # length | format | reserved | taken
-    reason: str | None = None
 
 
 class DailyViews(BaseModel):
@@ -57,6 +52,8 @@ class LinkStats(BaseModel):
 class PublicCV(BaseModel):
     """What anyone with the link can read. Nothing here identifies the account."""
 
+    key: str
+    # The current name; a request made with an older name can be redirected to it
     slug: str
     title: str
     language: str

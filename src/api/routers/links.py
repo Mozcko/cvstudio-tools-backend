@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,19 +11,19 @@ from src.core.config import settings
 from src.models.cv import CV
 from src.models.public_link import LinkView, PublicLink
 from src.models.user import User
-from src.schemas.link_schemas import DailyViews, LinkOut, LinkStats, LinkWrite, ReferrerViews, SlugCheck
-from src.services.public_links import normalize_slug, served_link_ids, slug_problem
+from src.schemas.link_schemas import DailyViews, LinkOut, LinkStats, LinkWrite, ReferrerViews
+from src.services.public_links import new_key, normalize_slug, served_link_ids, slug_problem
 
 router = APIRouter(tags=["Public links"])
 
 STATS_DAYS = 30
 TOP_REFERRERS = 5
+KEY_ATTEMPTS = 5
 
 FREE_LINK_LIMIT_DETAIL = "Free plan allows one public link. Upgrade to Pro to share more CVs."
 SLUG_DETAILS = {
     "length": "The name must be between 3 and 40 characters.",
     "format": "Use lowercase letters, numbers and single hyphens, without a hyphen at either end.",
-    "reserved": "That name is not available.",
 }
 
 
@@ -70,6 +70,7 @@ def _out(link: PublicLink, served: set, counts: dict) -> LinkOut:
     total, new = counts.get(link.id, (0, 0))
     return LinkOut(
         cv_id=link.cv_id,
+        key=link.key,
         slug=link.slug,
         is_active=link.is_active,
         paused=link.is_active and link.id not in served,
@@ -91,23 +92,6 @@ async def list_links(user: User = Depends(get_current_user_obj), db: AsyncSessio
     served = await served_link_ids(db, user)
     counts = await _view_counts(db, links)
     return [_out(link, served, counts) for link in links]
-
-
-@router.get("/links/check", response_model=SlugCheck)
-async def check_slug(
-    slug: str = Query(max_length=80),
-    cv_id: uuid.UUID | None = None,
-    user: User = Depends(get_current_user_obj),
-    db: AsyncSession = Depends(get_db),
-):
-    """Whether a name can be used (for the CV given, which may already hold it)."""
-    name = normalize_slug(slug)
-    problem = slug_problem(name)
-    if problem:
-        return SlugCheck(slug=name, available=False, reason=problem)
-    holder = (await db.execute(select(PublicLink).where(PublicLink.slug == name))).scalar_one_or_none()
-    taken = holder is not None and not (holder.user_id == user.id and holder.cv_id == cv_id)
-    return SlugCheck(slug=name, available=not taken, reason="taken" if taken else None)
 
 
 @router.post("/links/seen", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,20 +127,45 @@ async def save_link(
         if others.scalar_one() >= settings.FREE_PUBLIC_LINK_LIMIT:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FREE_LINK_LIMIT_DETAIL)
 
-    if link is None:
-        link = PublicLink(id=uuid.uuid4(), cv_id=cv_id, user_id=user.id, created_at=datetime.now(UTC))
-        db.add(link)
-    link.slug = slug
-    link.is_active = body.is_active
-    link.show_email = body.show_email
-    link.show_phone = body.show_phone
-    link.indexable = body.indexable
+    settings_of_link = {
+        "slug": slug,
+        "is_active": body.is_active,
+        "show_email": body.show_email,
+        "show_phone": body.show_phone,
+        "indexable": body.indexable,
+    }
+    user_id = user.id
 
-    try:
+    if link is not None:
+        # The name is free to change; the key, which is what the address is found by, never does
+        for field, value in settings_of_link.items():
+            setattr(link, field, value)
         await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That name is already taken.") from None
+    else:
+        # A new link needs a key nobody has. A clash is next to impossible; try again if it happens
+        for attempt in range(KEY_ATTEMPTS):
+            link = PublicLink(
+                id=uuid.uuid4(),
+                cv_id=cv_id,
+                user_id=user_id,
+                key=new_key(),
+                created_at=datetime.now(UTC),
+                **settings_of_link,
+            )
+            db.add(link)
+            try:
+                await db.commit()
+                break
+            except IntegrityError:
+                await db.rollback()
+                # The rollback expired what was loaded in this session
+                await db.refresh(user)
+                still_free = await db.execute(select(PublicLink.id).where(PublicLink.cv_id == cv_id))
+                if still_free.first() or attempt == KEY_ATTEMPTS - 1:
+                    # Not a key clash (the CV got a link meanwhile), or we ran out of tries
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT, detail="The link could not be saved. Please try again."
+                    ) from None
 
     served = await served_link_ids(db, user)
     counts = await _view_counts(db, [link])

@@ -125,7 +125,7 @@ Defined in `src/models/`, created and changed **only** through Alembic migration
 ### `public_links` and `link_views`
 
 `public_links`: one row per published CV — `cv_id` (unique, cascade), `user_id` (cascade),
-`slug` (unique), `is_active`, `show_email`, `show_phone`, `indexable`, `views_seen_at`.
+`key` (unique, random, never changes), `slug` (the readable name, not unique), `is_active`, `show_email`, `show_phone`, `indexable`, `views_seen_at`.
 
 `link_views`: one row per counted visit — `link_id` (cascade), `viewed_at`, `visitor`,
 `referrer_host`.

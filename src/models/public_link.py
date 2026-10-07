@@ -8,14 +8,17 @@ from src.db.database import Base
 
 
 class PublicLink(Base):
-    """A CV published at /u/<slug>. At most one per CV."""
+    """A CV published at /u/<slug>-<key>. At most one per CV."""
 
     __tablename__ = "public_links"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cv_id = Column(UUID(as_uuid=True), ForeignKey("cvs.id", ondelete="CASCADE"), nullable=False, unique=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    slug = Column(String, nullable=False, unique=True)
+    # What identifies the link: random, never changes, never reused
+    key = Column(String, nullable=False, unique=True)
+    # The readable part of the address, chosen by the owner. Not unique: the key is
+    slug = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, server_default=true())
     # What of the owner's contact details the public page shows
     show_email = Column(Boolean, nullable=False, server_default=true())
