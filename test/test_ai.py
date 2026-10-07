@@ -61,9 +61,10 @@ def rewrite_body(**overrides):
     return body
 
 
-async def test_rewrite_requires_pro(client, fake_ai):
-    response = await client.post("/api/v1/ai/rewrite", json=rewrite_body())
+async def test_translate_requires_pro(client, fake_ai):
+    response = await client.post("/api/v1/ai/rewrite", json=rewrite_body(action="translate"))
     assert response.status_code == 403
+    assert "Pro" in response.json()["detail"]
     assert fake_ai.calls == []
 
 

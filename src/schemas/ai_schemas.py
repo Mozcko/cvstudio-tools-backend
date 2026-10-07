@@ -35,6 +35,8 @@ class RewriteRequest(BaseModel):
 
 class RewriteResponse(BaseModel):
     cv: dict[str, Any]
+    # Free rewrites left this week; null for Pro
+    free_remaining: int | None = None
 
 
 class ImprovementRequest(BaseModel):

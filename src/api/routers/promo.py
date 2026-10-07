@@ -55,7 +55,7 @@ async def redeem_promo(
 
     promo.used_count += 1
     db.add(PromoRedemption(promo_id=promo.id, user_id=user_id))
-    grant_pro(user, promo.granted_days)
+    grant_pro(user, promo.granted_days, premium=bool(promo.premium))
 
     try:
         await db.commit()

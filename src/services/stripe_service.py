@@ -11,12 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.models.payment import Payment
 from src.models.user import User
-from src.services.pro import grant_pro, revoke_grant
+from src.services.pro import PLAN_GRANTS, grant_pro, revoke_grant
 
 logger = logging.getLogger(__name__)
-
-# plan_duration metadata -> days of Pro (None = lifetime)
-PLAN_DAYS = {"7": 7, "30": 30, "lifetime": None}
 
 
 async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
@@ -30,7 +27,7 @@ async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
     clerk_user_id = session.get("client_reference_id") or metadata.get("user_id")
     plan_duration = metadata.get("plan_duration")
 
-    if not session_id or not clerk_user_id or plan_duration not in PLAN_DAYS:
+    if not session_id or not clerk_user_id or plan_duration not in PLAN_GRANTS:
         logger.warning("Ignoring checkout session %s: missing user or unknown plan", session_id)
         return
 
@@ -39,7 +36,7 @@ async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
     if existing.scalar_one_or_none():
         return
 
-    days = PLAN_DAYS[plan_duration]
+    days, premium = PLAN_GRANTS[plan_duration]
 
     result = await db.execute(select(User).where(User.id == clerk_user_id).with_for_update())
     user = result.scalar_one_or_none()
@@ -48,7 +45,7 @@ async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
         user = User(id=clerk_user_id, is_pro=False)
         db.add(user)
 
-    grant_pro(user, days)
+    grant_pro(user, days, premium=premium)
     db.add(
         Payment(
             session_id=session_id,
@@ -85,7 +82,9 @@ async def _handle_charge_refunded(charge: dict, db: AsyncSession) -> None:
     user_result = await db.execute(select(User).where(User.id == payment.user_id).with_for_update())
     user = user_result.scalar_one_or_none()
     if user:
-        revoke_grant(user, payment.granted_days)
+        # The plan that was bought decides whether premium time is taken back too
+        _, premium = PLAN_GRANTS.get(payment.plan, (None, False))
+        revoke_grant(user, payment.granted_days, premium=premium)
 
     payment.refunded_at = datetime.now(UTC)
     await db.commit()

@@ -15,7 +15,18 @@ async def create_cv(client, title="CV", **extra):
 async def test_me_creates_user_and_hides_internal_fields(client):
     response = await client.get("/api/v1/users/me")
     assert response.status_code == 200
-    assert response.json() == {"id": "user_test_1", "is_pro": False, "pro_expires_at": None}
+    assert response.json() == {
+        "id": "user_test_1",
+        "is_pro": False,
+        "pro_expires_at": None,
+        "plan": "free",
+        "is_premium": False,
+        "premium_until": None,
+        "usage": {
+            "free_ai": {"limit": 3, "remaining": 3, "resets_at": None},
+            "free_imports": {"limit": 2, "remaining": 2, "resets_at": None},
+        },
+    }
 
 
 async def test_me_applies_expiry(client, db):

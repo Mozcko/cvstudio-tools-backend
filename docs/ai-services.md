@@ -15,7 +15,8 @@ No temperature, token limit, timeout or retry is set on the calls — SDK defaul
 
 ## The gate: Pro and rate limit
 
-Every AI route depends on `enforce_ai_quota` (`src/api/dependencies.py`):
+ATS, cover letter and the deprecated `/ai/improve` depend on `enforce_ai_quota`
+(`src/api/dependencies.py`):
 
 1. `require_pro` → `403` for non-Pro users.
 2. Count the user's rows in `ai_requests` for the last hour and the last day. At or above
@@ -33,6 +34,17 @@ WHERE created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 3 DESC;
 
 Request bodies are size-limited in `src/schemas/ai_schemas.py` (job description 20 000 characters,
 CV 200 000 characters of JSON).
+
+### Rewrite: a weekly allowance for free users
+
+`POST /ai/rewrite` uses `reserve_rewrite` instead. Pro users get every action under the rate
+limit above. A non-Pro user may run **enhance** and **optimize** `FREE_AI_WEEKLY_LIMIT` (3) times
+per rolling 7 days (`translate` answers `403`). Free uses are recorded in `ai_requests` under the
+key `free:rewrite`, so what someone did while Pro never counts against their free allowance.
+The response carries `free_remaining`.
+
+Like the import, the allowance is reserved in the handler after the body is valid and released
+if the AI call fails (`release_allowance`).
 
 ### The exception: CV import
 

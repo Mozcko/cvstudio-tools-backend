@@ -74,13 +74,32 @@ State lives in two columns:
 | `true` | `null` | Lifetime |
 | `true` | a past timestamp | Expired but not yet noticed — becomes Free on the user's next request |
 
+### Levels
+
+There are two paid levels. **Pro** is what every paid plan gives. **Premium** is the extra level
+for features with a real running cost (the voice mock interview): it comes with Active Hunt and
+Lifetime, not with the Sprint Pass.
+
+| Plan (`plan` in `/users/me`) | Bought as | Pro | Premium |
+| :--- | :--- | :---: | :---: |
+| `free` | — | | |
+| `sprint` | plan `7` | 7 days | |
+| `active` | plan `30` | 30 days | the same 30 days |
+| `lifetime` | plan `lifetime` | for ever | for ever |
+
+Premium is one more column, `users.premium_until`. A user is premium when they are lifetime, or
+`premium_until` is in the future. It always lies inside the Pro period, so mixed purchases work
+out naturally: Active Hunt then a Sprint Pass gives 37 days of Pro of which the first 30 are
+premium. `PLAN_GRANTS` in `src/services/pro.py` is the single table of what each plan grants.
+Promo codes carry their own `premium` flag (lifetime codes are always premium).
+
 All changes go through `src/services/pro.py`:
 
 | Function | Behaviour |
 | :--- | :--- |
 | `apply_expiry(user)` | Downgrades a user whose time has run out |
-| `grant_pro(user, days)` | `days=None` or `≥ 9999` → lifetime. Otherwise **adds** the days to the remaining time (or starts from now). Never shortens access and never downgrades lifetime |
-| `revoke_grant(user, days)` | Undoes one grant: lifetime → Free; timed → subtract the days (and downgrade if that leaves none). A lifetime user keeps lifetime when a timed grant is revoked |
+| `grant_pro(user, days, premium=False)` | `days=None` or `≥ 9999` → lifetime. Otherwise **adds** the days to the remaining time (or starts from now). Never shortens access and never downgrades lifetime |
+| `revoke_grant(user, days, premium=False)` | Undoes one grant: lifetime → Free; timed → subtract the days (and downgrade if that leaves none). A lifetime user keeps lifetime when a timed grant is revoked |
 
 There is no scheduled job; expiry is applied lazily by `get_current_user_obj`.
 
@@ -90,7 +109,18 @@ There is no scheduled job; expiry is applied lazily by `get_current_user_obj`.
 | :--- | :--- |
 | More than `FREE_CV_LIMIT` (3) CVs | `POST /cvs/` — counted at creation time only |
 | More than `FREE_IMPORT_LIMIT` (2) AI imports | `POST /ai/import` — lifetime total for non-Pro users |
-| AI endpoints | `require_pro`, via `enforce_ai_quota` |
+| AI tools beyond the free allowance (below) | `require_pro` via `enforce_ai_quota`, or `reserve_rewrite` |
+| Premium features | `require_premium` — Active Hunt and Lifetime only |
+
+### What a free user gets
+
+| Allowance | Setting | Counted |
+| :--- | :--- | :--- |
+| Enhance / Optimize | `FREE_AI_WEEKLY_LIMIT` (3) | per rolling 7 days |
+| AI-assisted CV import | `FREE_IMPORT_LIMIT` (2) | lifetime |
+
+Both are counted from `ai_requests` and reported in `usage` by `GET /users/me`. Only successful
+calls count. Translate, ATS, cover letter and premium features are never free.
 
 Existing CVs beyond the limit remain readable, editable and deletable after Pro lapses; only
 creating new ones is blocked.

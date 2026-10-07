@@ -4,11 +4,16 @@ import re
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.dependencies import enforce_ai_quota, get_current_user_obj, get_db, reserve_import
-from src.models.ai_request import AIRequest
+from src.api.dependencies import (
+    enforce_ai_quota,
+    get_current_user_obj,
+    get_db,
+    release_allowance,
+    reserve_import,
+    reserve_rewrite,
+)
 from src.models.user import User
 from src.schemas.ai_schemas import (
     ATSRequest,
@@ -55,10 +60,21 @@ async def ai_errors(feature: str):
 
 
 @router.post("/rewrite", response_model=RewriteResponse)
-async def ai_rewrite(req: RewriteRequest, user: User = Depends(enforce_ai_quota)):
-    async with ai_errors("rewrite"):
-        result = await rewrite_cv(req.cv_content, req.action, req.target_language, req.job_description)
-    return RewriteResponse(cv=result)
+async def ai_rewrite(
+    req: RewriteRequest,
+    request: Request,
+    user: User = Depends(get_current_user_obj),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enhance, optimize or translate a CV. Non-Pro users get a small weekly allowance."""
+    allowance = await reserve_rewrite(request.url.path, req.action, user, db)
+    try:
+        async with ai_errors("rewrite"):
+            result = await rewrite_cv(req.cv_content, req.action, req.target_language, req.job_description)
+    except HTTPException:
+        await release_allowance(allowance, db)
+        raise
+    return RewriteResponse(cv=result, free_remaining=allowance.remaining)
 
 
 @router.post("/improve", deprecated=True)
@@ -122,8 +138,7 @@ async def ai_import(
                 ) from None
     except HTTPException:
         # An import that produced nothing does not count against the user's allowance
-        await db.execute(delete(AIRequest).where(AIRequest.id == allowance.request_id))
-        await db.commit()
+        await release_allowance(allowance, db)
         raise
 
     return ImportResponse(cv=result, remaining_free_imports=allowance.remaining)
