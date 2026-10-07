@@ -45,6 +45,10 @@ Details are written for end users — provider and internal errors are logged, n
 | `GET` | `/public/cv/{ref}` | **none** | — | The published CV, as anyone may read it |
 | `POST` | `/public/cv/{ref}/view` | **none** | — | Count one visit |
 | `GET` | `/recruiter/me` | ✅ | — | Recruiter plan, usage and what is left |
+| `POST` / `GET` | `/recruiter/screenings` | ✅ | recruiter plan or trial to create | Open a screening / list them |
+| `GET` / `PUT` / `DELETE` | `/recruiter/screenings/{id}` | ✅ | — | Ranking, rename or edit rubric, delete |
+| `POST` | `/recruiter/screenings/{id}/candidates` | ✅ | uses one CV of the allowance | Evaluate a CV |
+| `PUT` / `DELETE` | `/recruiter/screenings/{id}/candidates/{cid}` | ✅ | — | Name and notes, delete |
 | `POST` | `/recruiter/billing/checkout` | ✅ | — | Start a recruiter subscription |
 | `POST` | `/recruiter/billing/portal` | ✅ | — | Open Stripe's page to manage the subscription |
 | `POST` | `/billing/create-checkout-session` | ✅ | — | Start a Stripe Checkout |
@@ -431,6 +435,60 @@ not configured, `502` on a Stripe failure.
 
 → `{ "url": "https://billing.stripe.com/…" }`. `404` when the user never had a Stripe
 subscription.
+
+## Recruiter screenings
+
+How ranking works: [ai-services.md](./ai-services.md#candidate-ranking-for-recruiters).
+Someone else's screening, and one past its retention date, are `404`.
+
+### `POST /recruiter/screenings` → `201`
+
+`{ "title": "…", "job_description": "50 to 20 000 characters", "language": "es | en | pt" }`
+
+Returns the screening with its rubric (shape below). `403` when the user has no allowance left
+(the reason is in `detail`), `429` after 20 screenings in a day, `502` / `503` on AI failure.
+
+```json
+{ "id": "uuid", "title": "…", "language": "es", "candidates": 3, "top_score": 82,
+  "created_at": "…", "expires_at": "…", "job_description": "…",
+  "rubric": [ { "id": "r1", "text": "5+ years of Python", "kind": "must | nice" } ],
+  "rubric_locked": true,
+  "ranking": [ {
+    "id": "uuid", "rank": 1, "top": true, "display_name": "Ana Torres", "file_name": "ana.pdf",
+    "contact": { "emails": ["…"], "phones": ["…"], "links": ["…"] },
+    "score": 82, "missing_musts": 0, "flagged": false, "note": "",
+    "result": {
+      "requirements": [ { "id": "r1", "text": "…", "kind": "must", "status": "met | partial | missing",
+                          "evidence": "a sentence from the CV", "verified": true } ],
+      "strengths": ["…"], "concerns": ["…"], "summary": "…" },
+    "created_at": "…" } ] }
+```
+
+`top` marks the first five. `flagged` means the CV contains text that reads like instructions to
+an AI. `GET /recruiter/screenings` returns the list without `job_description`, `rubric` and
+`ranking`.
+
+### `PUT /recruiter/screenings/{id}`
+
+`{ "title"?: "…", "rubric"?: [ { "id"?: "r1", "text": "…", "kind": "must | nice" } ] }`. The
+rubric can only be changed while the screening has no candidates (`409` after).
+
+### `POST /recruiter/screenings/{id}/candidates`
+
+`{ "file_name": "ana.pdf", "text": "the CV as text, 80 to 60 000 characters" }` →
+`{ "candidate": { … }, "duplicate": false }`. Files are read in the browser; only text is sent.
+
+| Status | When |
+| :--- | :--- |
+| `200` with `"duplicate": true` | The same CV is already in this screening: nothing evaluated, nothing charged |
+| `403` | No allowance left, payment failed, or the plan ended (`detail` says which) |
+| `409` | The screening already holds 500 candidates |
+| `422` | Too little or too much text |
+| `502` / `503` | AI failure; the allowance is not used |
+
+### `PUT` / `DELETE /recruiter/screenings/{id}/candidates/{cid}`
+
+`PUT` takes `{ "display_name"?: "…", "note"?: "…" }`. The score cannot be changed.
 
 ## Promo codes
 

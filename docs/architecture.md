@@ -126,6 +126,16 @@ Defined in `src/models/`, created and changed **only** through Alembic migration
 | `premium_until` | `DateTime(tz)`, nullable | End of the premium level (Active Hunt); lifetime users are premium without it |
 | `created_at` / `updated_at` | `DateTime(tz)` | `updated_at` is `NULL` until the first update |
 
+### `screenings` and `screening_candidates`
+
+`screenings`: a vacancy — `user_id` (cascade), `title`, `job_description`, `language`, `rubric`
+(JSONB), `created_at`, `expires_at` (indexed; rows past it are deleted hourly).
+
+`screening_candidates`: one evaluated CV — `screening_id` (cascade), `display_name`, `file_name`,
+`contact` (JSONB), `text_hash` (unique per screening), `score`, `missing_musts`, `flagged`,
+`result` (JSONB), `note`. **The CV text itself is not stored.** This table holds other people's
+personal data; it never outlives its screening.
+
 ### `recruiter_subscriptions`
 
 One row per user with a recruiter plan: `plan`, `status`, `current_period_start` / `_end`,

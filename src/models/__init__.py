@@ -7,5 +7,6 @@ from src.models import (  # noqa: F401
     promo,
     public_link,
     recruiter,
+    screening,
     user,
 )
