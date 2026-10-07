@@ -1,0 +1,85 @@
+name: Uptime
+
+# Probes the live API and site. When either is down it opens one issue labelled `incident`
+# (GitHub emails watchers); when both are back it closes it.
+#
+# Note: GitHub pauses scheduled workflows in repositories with no activity for 60 days,
+# and may delay a scheduled run by several minutes.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: Override the API URL (for testing the alert)
+        required: false
+      site_url:
+        description: Override the site URL (for testing the alert)
+        required: false
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    name: 🩺 Probe production
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BACKEND_URL: ${{ inputs.backend_url || vars.BACKEND_URL }}
+      SITE_URL: ${{ inputs.site_url || vars.SITE_URL }}
+    steps:
+      - name: Check endpoints
+        id: check
+        run: |
+          failures=""
+          # 3 attempts, 20 seconds apart, so a single slow response or a deploy in progress
+          # does not raise an alert
+          probe() {
+            name=$1; url=$2; expect=$3
+            if [ -z "$url" ]; then echo "skip $name: no URL configured"; return; fi
+            for attempt in 1 2 3; do
+              body=$(curl -fsS --max-time 20 "$url" 2>/dev/null) && echo "$body" | grep -q "$expect" && { echo "ok   $name"; return; }
+              sleep 20
+            done
+            echo "DOWN $name ($url)"
+            failures="$failures\n- **$name** did not answer correctly: \`$url\`"
+          }
+          probe "API"  "${BACKEND_URL:+$BACKEND_URL/health}" '"healthy"'
+          probe "Site" "$SITE_URL" '<html'
+          {
+            echo "failures<<EOF_FAILURES"
+            printf '%b\n' "$failures"
+            echo "EOF_FAILURES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the incident
+        if: steps.check.outputs.failures != ''
+        env:
+          FAILURES: ${{ steps.check.outputs.failures }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create incident --color B60205 --description "Production is down or degraded" --force
+          now=$(date -u '+%Y-%m-%d %H:%M UTC')
+          open=$(gh issue list --label incident --state open --json number -q '.[0].number')
+          if [ -z "$open" ]; then
+            gh issue create --label incident --title "🚨 Production check failing" --body "$(printf 'The uptime check failed at %s.\n%s\n\nRun: %s\n\nThis issue closes itself when the checks pass again.' "$now" "$FAILURES" "$RUN_URL")"
+          else
+            # One issue per incident: keep its body current instead of adding a comment every run
+            gh issue edit "$open" --body "$(printf 'Still failing as of %s.\n%s\n\nLatest run: %s\n\nThis issue closes itself when the checks pass again.' "$now" "$FAILURES" "$RUN_URL")"
+          fi
+          exit 1
+
+      - name: Close the incident on recovery
+        if: steps.check.outputs.failures == ''
+        run: |
+          for number in $(gh issue list --label incident --state open --json number -q '.[].number'); do
+            gh issue close "$number" --comment "✅ Checks are passing again as of $(date -u '+%Y-%m-%d %H:%M UTC')."
+          done

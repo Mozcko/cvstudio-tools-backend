@@ -24,7 +24,8 @@ src/
 ├── main.py                 App: logging, CORS, router mounting, /health
 ├── core/
 │   ├── config.py           Settings (env vars), allowed origins
-│   └── security.py         Clerk token verification → user id
+│   ├── security.py         Clerk token verification → user id
+│   └── observability.py    Error reporting (Sentry) with personal data scrubbed
 ├── api/
 │   ├── dependencies.py     get_db, get_current_user(_obj), require_pro, enforce_ai_quota
 │   └── routers/
@@ -97,6 +98,7 @@ variable stops the process (and Alembic, and the tests) immediately.
 | `STRIPE_API_KEY` | for checkout | — | Creating Checkout sessions |
 | `STRIPE_WEBHOOK_SECRET` | for the webhook | — | Verifying Stripe webhooks |
 | `STRIPE_PRICE_7D`, `_30D`, `_LIFETIME` | for checkout | — | Stripe price ids per plan |
+| `SENTRY_DSN` | | — | Error reporting. Unset = nothing is sent |
 | `PROJECT_NAME` | | `CV Studio Tools API` | OpenAPI title, `/health` |
 
 ## Database schema
@@ -163,6 +165,10 @@ header).
 | OpenAI | outbound chat completions | `services/ai/*` |
 
 ## Logging
+
+Unhandled errors and `ERROR`-level log records are reported to Sentry when `SENTRY_DSN` is set
+(`src/core/observability.py`). Request bodies, query strings, cookies, credentials and stack-frame
+variables are never included: CV content and job descriptions must not leave the server.
 
 `main.py` configures the standard `logging` module (INFO, or DEBUG when `DEBUG=true`), writing to
 stdout. Modules use `logging.getLogger(__name__)`. User content — CV data, job descriptions — is

@@ -1,79 +1,32 @@
-# CV Studio Tools Backend
+# CV Studio Tools Backend — notes for AI coding agents
 
-A FastAPI-based backend service for CV/Resume optimization tools, featuring AI-powered improvements, cover letter generation, ATS analysis, and translation.
+FastAPI service behind CVStudio.tools: CV storage, Pro access, Stripe billing and AI features.
+The full, maintained documentation is in [`docs/`](./docs/README.md); read
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) before changing anything. This file only lists the rules
+that are easy to get wrong.
 
-## Project Overview
+## Commands
 
-- **Framework:** [FastAPI](https://fastapi.tiangolo.com/)
-- **Database:** PostgreSQL with [SQLAlchemy](https://www.sqlalchemy.org/) (Async)
-- **Authentication:** [Clerk](https://clerk.com/) (external provider, user IDs synchronized to local DB)
-- **Payments:** [Stripe](https://stripe.com/)
-- **AI Integration:** [DeepSeek](https://www.deepseek.com/) and [OpenAI](https://openai.com/)
-- **Migrations:** [Alembic](https://alembic.sqlalchemy.org/)
-- **Containerization:** Docker & Docker Compose
-
-## Architecture
-
-- `src/api/routers`: API endpoints categorized by feature (AI, CV, Billing, etc.)
-- `src/models`: SQLAlchemy database models.
-- `src/schemas`: Pydantic models for request/response validation.
-- `src/services`: Business logic, including Stripe integration and AI providers.
-- `src/core`: Configuration and security logic.
-- `src/db`: Database connection and session management.
-
-## Building and Running
-
-### Using Docker (Recommended)
 ```bash
-docker-compose up --build
+make up        # run locally (Docker); API on :8000
+make check     # lint, format check, tests with coverage, migration checks: must pass before a PR
+make format    # apply ruff fixes and formatting
+make migration m="describe the change"   # create an Alembic migration from model changes
 ```
 
-### Local Development
-1. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. Configure environment variables in a `.env` file (refer to `.env.example`).
-3. Run the application:
-   ```bash
-   uvicorn src.main:app --reload
-   ```
+## Rules
 
-### Database Migrations
-- Create a new migration:
-  ```bash
-  alembic revision --autogenerate -m "message"
-  ```
-- Apply migrations:
-  ```bash
-  alembic upgrade head
-  ```
-
-## Testing
-
-Run tests using `pytest`:
-```bash
-pytest
-```
-Tests are located in the `test/` directory. We use `httpx` for async API testing and `unittest.mock` for mocking dependencies.
-
-## Development Conventions
-
-- **Async First:** Use `async/await` for all I/O operations (database, external APIs).
-- **Dependency Injection:** Utilize FastAPI's `Depends` for database sessions and authentication.
-- **Type Safety:** Heavily use Pydantic schemas and Python type hints.
-- **API Versioning:** All endpoints are prefixed with `/api/v1`.
-- **Environment Management:** Configuration is managed via Pydantic Settings in `src/core/config.py`.
-- **Authentication:** Use `get_current_user` dependency from `src/api/dependencies.py` to ensure user existence and subscription status.
-
-## Utilities
-
-### Manual User Upgrade
-To manually grant Pro status to a user (e.g., for testing or manual sales):
-```bash
-python src/scripts/upgrade_user.py --user-id "user_..."
-# OR
-python src/scripts/upgrade_user.py --email "user@example.com"
-```
+- **Alembic owns the schema.** The app does not create tables at startup. Every model change needs
+  a migration, and new model modules must be imported in `src/models/__init__.py`.
+- **Pro access is changed only in `src/services/pro.py`** (`grant_pro`, `revoke_grant`).
+- **Authentication:** use `get_current_user` / `get_current_user_obj` from `src/api/dependencies.py`;
+  scope every query to that user. Tokens are verified in `src/core/security.py`.
+- **AI endpoints:** mask personal data with `mask_cv_pii` before calling the model, guard the route
+  with `enforce_ai_quota`, and put user-supplied text in the user message, never the system prompt.
+- **Errors and logs:** return user-facing messages, log the technical cause. Never log or report CV
+  content, job descriptions, emails or tokens.
+- **Tests never call Clerk, Stripe or OpenAI.** Use the fakes and fixtures in `test/`. Coverage must
+  stay above the minimum in `pyproject.toml`.
+- **Secrets:** nothing secret-shaped in code or tests, even as a placeholder; generate test values
+  (`test/fakes.py`). The repository is public.
+- Dependencies are pinned in `requirements.txt` (runtime) and `requirements-dev.txt` (tools).

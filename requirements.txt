@@ -11,3 +11,5 @@ stripe==16.0.0
 openai==3.24.0
 # Used by the OpenAI SDK (and the tests). Pinned because SDK and httpx versions must match.
 httpx==0.28.1
+# Error reporting; inactive unless SENTRY_DSN is set
+sentry-sdk[fastapi]==2.71.0

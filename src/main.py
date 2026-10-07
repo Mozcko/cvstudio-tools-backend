@@ -6,11 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.routers import ai, billing, cv, users, webhooks
 from src.api.routers import promo as promo_router
 from src.core.config import settings
+from src.core.observability import init_error_reporting
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+init_error_reporting()
 
 # The schema is managed by Alembic (`alembic upgrade head`), not created at startup.
 app = FastAPI(

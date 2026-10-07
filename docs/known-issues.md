@@ -89,8 +89,6 @@ request (and its database session) for as long as the SDK allows.
 | Item | Status |
 | :--- | :--- |
 | `POST /ai/improve` | Deprecated shim for clients that predate `/ai/rewrite`; delete once the new frontend is deployed everywhere |
-| `README.md` licence section | Placeholder text; setup section predates `CLERK_ISSUER` — use [development.md](./development.md) |
-| `GEMINI.md` | Describes the old startup behaviour (tables created automatically) |
 | Guards in the first two migrations | Needed only while pre-Alembic databases exist |
 
 ## Fixed in the `fix/known-issues` round
@@ -113,4 +111,5 @@ For reference when reading old notes or commits.
 | Scripts | `upgrade_user.py` supports `--days` and uses the shared grant logic |
 | Cleanup | DeepSeek wiring, unused modules, debug scripts and unused dependencies removed |
 | Dependencies | FastAPI/Starlette, PyJWT and the OpenAI SDK upgraded to versions without known vulnerabilities; audited in CI |
+| Monitoring | Scheduled uptime check that opens an incident issue; optional Sentry error reporting with request data scrubbed |
 | Pipeline | CI (lint, tests with 95% coverage floor, migrations, Docker smoke test, audit), CodeQL, Dependabot, gated deploy workflow |
