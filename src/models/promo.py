@@ -2,7 +2,7 @@ import uuid
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.sql import func
+from sqlalchemy.sql import false, func
 
 from src.db.database import Base
 
@@ -15,6 +15,8 @@ class PromoCode(Base):
     max_uses = Column(Integer, default=1)
     used_count = Column(Integer, default=0)
     granted_days = Column(Integer, default=30)  # 9999 for lifetime
+    # Whether the code grants the premium level (lifetime codes always do)
+    premium = Column(Boolean, nullable=False, default=False, server_default=false())
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

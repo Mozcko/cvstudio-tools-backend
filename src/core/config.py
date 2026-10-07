@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     FREE_CV_LIMIT: int = 3
     # AI-assisted CV imports a non-Pro user gets in total (0 disables them)
     FREE_IMPORT_LIMIT: int = 2
+    # Enhance / Optimize runs a non-Pro user gets per rolling 7 days (0 disables them)
+    FREE_AI_WEEKLY_LIMIT: int = 3
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:4321"

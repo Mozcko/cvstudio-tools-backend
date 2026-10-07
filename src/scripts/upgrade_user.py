@@ -13,7 +13,7 @@ from src.models.user import User
 from src.services.pro import grant_pro
 
 
-async def upgrade_user(user_id: str = None, email: str = None, days: int = None):
+async def upgrade_user(user_id: str = None, email: str = None, days: int = None, premium: bool = False):
     """
     Manually grants Pro to a user. `days=None` means lifetime; otherwise the
     time is added on top of whatever the user has left.
@@ -41,7 +41,7 @@ async def upgrade_user(user_id: str = None, email: str = None, days: int = None)
             user = User(id=user_id, is_pro=False)
             session.add(user)
 
-        grant_pro(user, days)
+        grant_pro(user, days, premium=premium)
         await session.commit()
 
         until = user.pro_expires_at.isoformat() if user.pro_expires_at else "lifetime"
@@ -54,6 +54,9 @@ if __name__ == "__main__":
     parser.add_argument("--user-id", type=str, help="The Clerk User ID")
     parser.add_argument("--email", type=str, help="The user email address")
     parser.add_argument("--days", type=int, default=None, help="Days of Pro to grant (omit for lifetime)")
+    parser.add_argument(
+        "--premium", action="store_true", help="Also grant the premium level for those days (lifetime always has it)"
+    )
 
     args = parser.parse_args()
 
@@ -61,4 +64,4 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    sys.exit(asyncio.run(upgrade_user(user_id=args.user_id, email=args.email, days=args.days)))
+    sys.exit(asyncio.run(upgrade_user(user_id=args.user_id, email=args.email, days=args.days, premium=args.premium)))

@@ -22,13 +22,13 @@ Details are written for end users — provider and internal errors are logged, n
 | Method | Path | Auth | Pro | Purpose |
 | :--- | :--- | :---: | :---: | :--- |
 | `GET` | `/health` *(no `/api/v1`)* | — | — | Liveness |
-| `GET` | `/users/me` | ✅ | — | Current user and Pro status |
+| `GET` | `/users/me` | ✅ | — | Current user, plan and remaining free allowances |
 | `POST` | `/cvs/` | ✅ | — | Create a CV (free tier: max 3) |
 | `GET` | `/cvs/` | ✅ | — | List own CVs, newest first |
 | `GET` | `/cvs/{cv_id}` | ✅ | — | Read one CV |
 | `PUT` | `/cvs/{cv_id}` | ✅ | — | Partial update |
 | `DELETE` | `/cvs/{cv_id}` | ✅ | — | Delete |
-| `POST` | `/ai/rewrite` | ✅ | ✅ | Enhance / optimize / translate a CV |
+| `POST` | `/ai/rewrite` | ✅ | free: 3 per week | Enhance / optimize / translate a CV (translate is Pro-only) |
 | `POST` | `/ai/improve` | ✅ | ✅ | **Deprecated** shim for `/ai/rewrite` |
 | `POST` | `/ai/cover-letter` | ✅ | ✅ | Generate a cover letter |
 | `POST` | `/ai/ats` | ✅ | ✅ | ATS simulation |
@@ -54,10 +54,23 @@ Does not touch the database.
 Returns the caller's user, creating the row on first sight and applying Pro expiry.
 
 ```json
-{ "id": "user_2abc…", "is_pro": false, "pro_expires_at": null }
+{
+  "id": "user_2abc…",
+  "is_pro": false,
+  "pro_expires_at": null,
+  "plan": "free | sprint | active | lifetime",
+  "is_premium": false,
+  "premium_until": null,
+  "usage": {
+    "free_ai":      { "limit": 3, "remaining": 2, "resets_at": null },
+    "free_imports": { "limit": 2, "remaining": 2, "resets_at": null }
+  }
+}
 ```
 
-`pro_expires_at` is `null` for free users and for lifetime Pro.
+`pro_expires_at` is `null` for free users and for lifetime Pro. `is_premium` is true for Active
+Hunt (until `premium_until`) and Lifetime. `usage` is what a non-Pro user has left;
+`free_ai.resets_at` is set once the weekly allowance is used up.
 
 ## CVs
 
@@ -140,8 +153,12 @@ See [ai-services.md](./ai-services.md) for what happens inside.
 }
 ```
 ```json
-{ "cv": { "…the rewritten CV, same structure…" } }
+{ "cv": { "…the rewritten CV, same structure…" }, "free_remaining": 2 }
 ```
+
+Non-Pro users may run `enhance` and `optimize` three times per rolling week
+(`"free_remaining"` counts down; it is `null` for Pro). After that, and for `translate`, the
+answer is `403`.
 
 Contact details in `cv_content` are masked before the model sees them and restored in the result.
 
