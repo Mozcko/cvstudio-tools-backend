@@ -110,7 +110,16 @@ There is no scheduled job; expiry is applied lazily by `get_current_user_obj`.
 | More than `FREE_CV_LIMIT` (3) CVs | `POST /cvs/` — counted at creation time only |
 | More than `FREE_IMPORT_LIMIT` (2) AI imports | `POST /ai/import` — lifetime total for non-Pro users |
 | AI tools beyond the free allowance (below) | `require_pro` via `enforce_ai_quota`, or `reserve_rewrite` |
+| More than `FREE_PUBLIC_LINK_LIMIT` (1) public link; no badge; view details | `PUT /cvs/{id}/link`, `GET /public/cv/{slug}`, `GET /cvs/{id}/link/stats` |
 | Premium features: the voice mock interview (`/interviews`) | `require_premium` — Active Hunt and Lifetime only |
+
+### Public links when Pro ends
+
+Nothing is deleted. A non-Pro owner's **oldest** active link stays online; the others are
+*paused*: they answer `404` publicly and are reported with `paused: true`, and come back by
+themselves if the user upgrades again. The check is made on every public request
+(`served_link_ids` in `src/services/public_links.py`), including for owners whose pass ran out
+while they were away.
 
 ### What a free user gets
 
