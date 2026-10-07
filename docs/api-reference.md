@@ -252,6 +252,7 @@ interview only counts once its questions were generated.
   "id": "uuid", "title": "Senior Python Engineer", "language": "es",
   "status": "active | completed", "question_count": 6, "current_question": 0, "done": false,
   "overall_score": null, "created_at": "…", "completed_at": null,
+  "questions": ["…the questions asked so far, as prepared…"],
   "turns": [
     { "index": 0, "role": "recruiter | candidate", "kind": "question | follow_up | answer | closing",
       "question": 0, "text": "Hola Jane, gracias por tu tiempo… ¿…?", "at": "…" }
@@ -261,7 +262,7 @@ interview only counts once its questions were generated.
 ```
 
 `done` becomes true when the recruiter has said goodbye; `current_question` then equals
-`question_count`.
+`question_count`. `questions` only lists what has been asked: later ones are not revealed early.
 
 ### `POST /interviews/{id}/answer`
 

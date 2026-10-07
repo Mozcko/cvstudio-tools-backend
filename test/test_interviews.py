@@ -163,6 +163,8 @@ async def test_start_prepares_questions_and_greets_by_first_name(client, db, ai)
     session = response.json()
     assert (session["status"], session["question_count"], session["current_question"]) == ("active", 5, 0)
     assert (session["title"], session["done"], session["report"]) == ("Senior Python Engineer", False, None)
+    # Only the question being asked is revealed
+    assert session["questions"] == ["Question 0?"]
     opening = session["turns"][0]
     assert (opening["role"], opening["kind"], opening["index"]) == ("recruiter", "question", 0)
     assert opening["text"].startswith("Hi Jane, thanks for your time")
@@ -281,6 +283,7 @@ async def test_full_interview_with_typed_answers(client, db, ai):
     ]
     detail = (await client.get(f"{BASE}/{session_id}")).json()
     assert [t["index"] for t in detail["turns"]] == list(range(9))
+    assert detail["questions"] == [f"Question {i}?" for i in range(4)]
     assert detail["turns"][2]["text"] == "Understood. Question 1?"
     assert detail["turns"][-1]["text"].startswith("Understood. That is everything from my side")
     assert (detail["done"], detail["status"]) == (True, "active")

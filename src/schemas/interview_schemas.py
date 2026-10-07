@@ -119,6 +119,9 @@ class SessionDetail(SessionSummary):
     current_question: int
     # True when the recruiter has said goodbye and only the report is left
     done: bool
+    # The questions asked so far, as prepared (recruiter turns also carry greetings and
+    # acknowledgements). Later questions are not revealed until they are reached.
+    questions: list[str]
     turns: list[Turn]
     report: Report | None = None
 

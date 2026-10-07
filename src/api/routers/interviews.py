@@ -110,6 +110,7 @@ def _detail(session: InterviewSession) -> SessionDetail:
         **_summary_fields(session),
         current_question=current,
         done=done,
+        questions=[question["text"] for question in session.questions[: current + 1]],
         turns=[Turn(index=i, **turn) for i, turn in enumerate(session.turns)],
         report=session.report,
     )
