@@ -95,6 +95,7 @@ variable stops the process (and Alembic, and the tests) immediately.
 | `OPENAI_MODEL` | | `gpt-4o-mini` | Model for all AI features |
 | `AI_RATE_LIMIT_PER_HOUR` / `_PER_DAY` | | `20` / `100` | Per-user AI call limits; `0` disables |
 | `FREE_CV_LIMIT` | | `3` | CVs a non-Pro user may create |
+| `FREE_IMPORT_LIMIT` | | `2` | AI-assisted CV imports a non-Pro user gets in total; `0` disables |
 | `STRIPE_API_KEY` | for checkout | — | Creating Checkout sessions |
 | `STRIPE_WEBHOOK_SECRET` | for the webhook | — | Verifying Stripe webhooks |
 | `STRIPE_PRICE_7D`, `_30D`, `_LIFETIME` | for checkout | — | Stripe price ids per plan |

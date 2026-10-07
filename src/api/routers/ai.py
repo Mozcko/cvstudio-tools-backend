@@ -3,13 +3,18 @@ import logging
 import re
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.dependencies import enforce_ai_quota
+from src.api.dependencies import enforce_ai_quota, get_current_user_obj, get_db, reserve_import
+from src.models.ai_request import AIRequest
 from src.models.user import User
 from src.schemas.ai_schemas import (
     ATSRequest,
     CoverLetterRequest,
+    ImportRequest,
+    ImportResponse,
     ImprovementRequest,
     RewriteRequest,
     RewriteResponse,
@@ -17,6 +22,7 @@ from src.schemas.ai_schemas import (
 from src.services.ai.ats import simulate_ats
 from src.services.ai.base import AINotConfiguredError
 from src.services.ai.cover_letter import generate_cover_letter
+from src.services.ai.importer import EmptyImportError, import_cv
 from src.services.ai.rewrite import rewrite_cv
 
 logger = logging.getLogger(__name__)
@@ -94,3 +100,30 @@ async def ai_ats(req: ATSRequest, user: User = Depends(enforce_ai_quota)):
     async with ai_errors("ATS"):
         result = await simulate_ats(req.cv_content, req.job_description, req.language)
     return result
+
+
+@router.post("/import", response_model=ImportResponse)
+async def ai_import(
+    req: ImportRequest,
+    request: Request,
+    user: User = Depends(get_current_user_obj),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turns the text of a resume (PDF text or an unknown structured format) into a CV."""
+    allowance = await reserve_import(request.url.path, user, db)
+    try:
+        async with ai_errors("import"):
+            try:
+                result = await import_cv(req.text, req.source, req.language)
+            except EmptyImportError:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No CV content could be read from this document.",
+                ) from None
+    except HTTPException:
+        # An import that produced nothing does not count against the user's allowance
+        await db.execute(delete(AIRequest).where(AIRequest.id == allowance.request_id))
+        await db.commit()
+        raise
+
+    return ImportResponse(cv=result, remaining_free_imports=allowance.remaining)

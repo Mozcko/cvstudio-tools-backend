@@ -89,6 +89,7 @@ There is no scheduled job; expiry is applied lazily by `get_current_user_obj`.
 | Rule | Enforced in |
 | :--- | :--- |
 | More than `FREE_CV_LIMIT` (3) CVs | `POST /cvs/` — counted at creation time only |
+| More than `FREE_IMPORT_LIMIT` (2) AI imports | `POST /ai/import` — lifetime total for non-Pro users |
 | AI endpoints | `require_pro`, via `enforce_ai_quota` |
 
 Existing CVs beyond the limit remain readable, editable and deletable after Pro lapses; only

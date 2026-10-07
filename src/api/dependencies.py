@@ -1,5 +1,7 @@
 import math
+import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, HTTPException, Request, status
@@ -51,10 +53,8 @@ async def require_pro(user: User = Depends(get_current_user_obj)) -> User:
     return user
 
 
-async def enforce_ai_quota(
-    request: Request, user: User = Depends(require_pro), db: AsyncSession = Depends(get_db)
-) -> User:
-    """Pro-only + per-user rate limit for AI endpoints. Records the call when accepted."""
+async def _check_ai_rate_limit(user: User, db: AsyncSession) -> None:
+    """Raises 429 when the user is at or above the hourly or daily AI limit."""
     now = datetime.now(UTC)
     windows = (
         (timedelta(hours=1), settings.AI_RATE_LIMIT_PER_HOUR),
@@ -79,6 +79,50 @@ async def enforce_ai_quota(
                 headers={"Retry-After": str(retry_after)},
             )
 
+
+async def enforce_ai_quota(
+    request: Request, user: User = Depends(require_pro), db: AsyncSession = Depends(get_db)
+) -> User:
+    """Pro-only + per-user rate limit for AI endpoints. Records the call when accepted."""
+    await _check_ai_rate_limit(user, db)
     db.add(AIRequest(user_id=user.id, endpoint=request.url.path))
     await db.commit()
     return user
+
+
+FREE_IMPORT_LIMIT_DETAIL = "Free import limit reached. Upgrade to Pro to import more CVs."
+
+
+@dataclass
+class ImportAllowance:
+    user: User
+    # The usage row recorded for this call, so it can be refunded if the import fails
+    request_id: uuid.UUID
+    # Imports a free user has left after this one; None for Pro
+    remaining: int | None
+
+
+async def reserve_import(endpoint: str, user: User, db: AsyncSession) -> ImportAllowance:
+    """
+    AI-assisted CV import: Pro users share the normal AI rate limit, everyone else gets
+    FREE_IMPORT_LIMIT imports in total. Records the call when accepted.
+
+    Not a FastAPI dependency on purpose: dependencies run even when the request body is
+    invalid, and a rejected request must not use up one of a free user's imports.
+    """
+    remaining = None
+    if user.is_pro:
+        await _check_ai_rate_limit(user, db)
+    else:
+        result = await db.execute(
+            select(func.count()).where(AIRequest.user_id == user.id, AIRequest.endpoint == endpoint)
+        )
+        used = result.scalar_one()
+        if used >= settings.FREE_IMPORT_LIMIT:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FREE_IMPORT_LIMIT_DETAIL)
+        remaining = settings.FREE_IMPORT_LIMIT - used - 1
+
+    usage = AIRequest(id=uuid.uuid4(), user_id=user.id, endpoint=endpoint)
+    db.add(usage)
+    await db.commit()
+    return ImportAllowance(user=user, request_id=usage.id, remaining=remaining)

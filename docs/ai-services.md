@@ -34,6 +34,14 @@ WHERE created_at > now() - interval '7 days' GROUP BY 1, 2 ORDER BY 3 DESC;
 Request bodies are size-limited in `src/schemas/ai_schemas.py` (job description 20 000 characters,
 CV 200 000 characters of JSON).
 
+### The exception: CV import
+
+`POST /ai/import` is open to every signed-in user. `reserve_import` (`src/api/dependencies.py`)
+applies the rate limit above to Pro users and gives everyone else `FREE_IMPORT_LIMIT` (2) imports
+in total, counted as their `ai_requests` rows for that endpoint. It is called from the handler,
+not as a dependency, so a request with an invalid body is rejected before anything is recorded;
+and the handler deletes the row again when the import fails, so only successful imports count.
+
 ## PII masking (`src/utils/sanitizer.py`)
 
 **Every** CV is masked before it is sent to the model.
@@ -55,6 +63,16 @@ and custom sections.
 | Rewrite (enhance / optimize / translate) | ✅ | ✅ |
 | ATS simulation | ✅ | n/a (no CV in the answer) |
 | Cover letter | ✅ | n/a (header is built in Python from the real values) |
+| Import | ✅ (text) | ✅ |
+
+An imported document is free text, not a CV object, so it has its own pair:
+`mask_text_pii(text)` replaces e-mail addresses, links and phone numbers with placeholders
+(`[[EMAIL_1]]`, `[[LINK_1]]`, `[[PHONE_1]]`) and returns the mapping; `restore_text_pii` puts the
+values back in every string of the result. Date ranges are recognised and left alone. A postal
+address or city in the text is **not** masked — there is no reliable pattern for it.
+
+The model's answer is validated against `ImportedCV` (`src/schemas/ai_schemas.py`): unknown keys
+are dropped, wrong types become empty values, and strings and lists are capped.
 
 ## Prompt structure
 
@@ -130,5 +148,5 @@ Provider messages never reach the client. Look in the server log for the cause.
 | Switch provider | `get_ai_client` in `base.py` |
 | Edit a prompt | `build_system_prompt` in `rewrite.py`, or the `system_prompt` in `ats.py` / `cover_letter.py` |
 | Mask more fields | `PERSONAL_FIELDS_TO_REDACT` in `sanitizer.py` (masking and restoring both use it) — extend `test/test_sanitizer.py` |
-| Change limits | `AI_RATE_LIMIT_PER_HOUR` / `AI_RATE_LIMIT_PER_DAY` settings |
+| Change limits | `AI_RATE_LIMIT_PER_HOUR` / `AI_RATE_LIMIT_PER_DAY` / `FREE_IMPORT_LIMIT` settings |
 | Add an AI endpoint | A function in `services/ai/` (mask first), a request schema in `schemas/ai_schemas.py` with size limits, a route in `routers/ai.py` using `Depends(enforce_ai_quota)` and `async with ai_errors(...)`, a test in `test/test_ai.py` with `FakeOpenAI`, and a client method in the frontend's `src/lib/api.ts` |

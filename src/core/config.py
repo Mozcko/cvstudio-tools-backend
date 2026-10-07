@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # Plans
     FREE_CV_LIMIT: int = 3
+    # AI-assisted CV imports a non-Pro user gets in total (0 disables them)
+    FREE_IMPORT_LIMIT: int = 2
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:4321"
