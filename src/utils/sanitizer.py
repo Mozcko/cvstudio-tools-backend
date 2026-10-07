@@ -71,7 +71,8 @@ def restore_cv_pii(original: dict[str, Any], processed: dict[str, Any]) -> dict[
 
 # --- Free text (documents a user imports) ---------------------------------------------------
 
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Bounded, and anchored to the start of a token, so matching stays linear on hostile input
+EMAIL_RE = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}")
 URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"')\]]+", re.IGNORECASE)
 # Digits joined by single separators; " - " between two numbers (a date range) does not match
 PHONE_RE = re.compile(r"(?<![\w/])\+?\(?\d(?:[ .\-]?[()]?[ ]?\d){8,14}(?![\w/])")

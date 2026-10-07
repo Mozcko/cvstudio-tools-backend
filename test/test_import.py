@@ -271,3 +271,13 @@ def test_mask_text_pii_round_trip():
 )
 def test_date_ranges_are_not_masked_as_phones(text):
     assert mask_text_pii(text) == (text, {})
+
+
+@pytest.mark.parametrize("filler", ["%", "a.", "1 ", "www.", "+1-"])
+def test_masking_stays_fast_on_hostile_text(filler):
+    import time
+
+    text = (filler * MAX_IMPORT_TEXT_CHARS)[:MAX_IMPORT_TEXT_CHARS]
+    started = time.perf_counter()
+    mask_text_pii(text)
+    assert time.perf_counter() - started < 2
