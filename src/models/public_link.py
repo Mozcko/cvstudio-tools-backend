@@ -8,7 +8,7 @@ from src.db.database import Base
 
 
 class PublicLink(Base):
-    """A CV published at /u/<slug>-<key>. At most one per CV."""
+    """A CV published at /u/<key>/<slug>. At most one per CV."""
 
     __tablename__ = "public_links"
 
