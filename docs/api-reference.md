@@ -38,6 +38,13 @@ Details are written for end users — provider and internal errors are logged, n
 | `POST` | `/interviews/{id}/answer` | ✅ | premium | Answer the current question (audio or text) |
 | `GET` | `/interviews/{id}/turns/{n}/audio` | ✅ | premium | Speech for something the recruiter said |
 | `POST` | `/interviews/{id}/finish` | ✅ | premium | End the interview and get the report |
+| `GET` | `/links` | ✅ | — | Own public links with view counts |
+| `GET` | `/links/check` | ✅ | — | Is a link name available? |
+| `POST` | `/links/seen` | ✅ | — | Mark current views as seen |
+| `PUT` / `DELETE` | `/cvs/{cv_id}/link` | ✅ | free: 1 active link | Publish a CV, change or remove its link |
+| `GET` | `/cvs/{cv_id}/link/stats` | ✅ | details: Pro | View statistics of a link |
+| `GET` | `/public/cv/{slug}` | **none** | — | The published CV, as anyone may read it |
+| `POST` | `/public/cv/{slug}/view` | **none** | — | Count one visit |
 | `POST` | `/billing/create-checkout-session` | ✅ | — | Start a Stripe Checkout |
 | `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code |
 | `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed / refunded |
@@ -304,6 +311,76 @@ Ends the interview at any point and returns the session with `status: "completed
 ```
 
 `400` when no question was answered. Calling it again returns the stored report.
+
+## Public links
+
+A CV can be published at `/u/<name>` on the site. One link per CV. See
+[auth-plans-billing.md](./auth-plans-billing.md) for the plan rules.
+
+### `PUT /cvs/{cv_id}/link`
+
+Creates the link or changes it.
+
+```json
+{ "slug": "juan-perez", "is_active": true, "show_email": true, "show_phone": false, "indexable": false }
+```
+```json
+{ "cv_id": "uuid", "slug": "juan-perez", "is_active": true, "paused": false,
+  "show_email": true, "show_phone": false, "indexable": false,
+  "views_total": 0, "views_new": 0, "created_at": "…" }
+```
+
+The name is lower-cased; 3–40 characters of `a-z`, `0-9` and single hyphens, not starting or
+ending with a hyphen, and not a reserved word (`admin`, `api`, `app`, `pricing`, …).
+
+| Status | When |
+| :--- | :--- |
+| `403` | A non-Pro user already has `FREE_PUBLIC_LINK_LIMIT` (1) active link on another CV |
+| `404` | The CV does not exist or belongs to someone else |
+| `409` | The name is taken |
+| `422` | The name is invalid or reserved |
+
+`paused` is true for a link that is switched on but not online, because the owner's plan allows
+fewer links than they have active (see the plan rules).
+
+`DELETE /cvs/{cv_id}/link` removes the link and its statistics and frees the name.
+
+### `GET /links`, `GET /links/check`, `POST /links/seen`
+
+`GET /links` returns the caller's links in the shape above. `views_new` counts views since the
+last `POST /links/seen`.
+
+`GET /links/check?slug=…&cv_id=…` → `{ "slug": "juan-perez", "available": false, "reason":
+"length | format | reserved | taken" }`. With `cv_id`, the name that CV already holds counts as
+available.
+
+### `GET /cvs/{cv_id}/link/stats`
+
+```json
+{ "views_total": 42, "visitors_total": 30,
+  "daily": [ { "day": "2026-10-07", "views": 3 } ],
+  "referrers": [ { "host": "linkedin.com", "views": 12 }, { "host": null, "views": 9 } ] }
+```
+
+`daily` (the last 30 days, every day present) and `referrers` (top 5; `null` host = unknown
+origin) are `null` for non-Pro users.
+
+### `GET /public/cv/{slug}` — no authentication
+
+```json
+{ "slug": "juan-perez", "title": "…", "language": "ES", "theme": "modern",
+  "content": { "…the CV…" }, "badge": true, "indexable": false, "updated_at": "…" }
+```
+
+`content` is the CV with `personal.email` / `personal.phone` blanked unless the owner chose to
+show them (in a Markdown-mode CV the matching text is removed). `badge` is true when the owner is
+not Pro. Nothing in the response identifies the account. `404`, always the same, when the link
+does not exist, is switched off, or is paused. Cached for 60 seconds.
+
+### `POST /public/cv/{slug}/view` — no authentication
+
+Body `{ "referrer": "https://…" }` (optional). `204`. See *View statistics* in
+[architecture.md](./architecture.md) for what is and is not stored.
 
 ## Billing
 

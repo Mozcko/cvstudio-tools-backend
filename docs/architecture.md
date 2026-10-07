@@ -97,6 +97,8 @@ variable stops the process (and Alembic, and the tests) immediately.
 | `FREE_CV_LIMIT` | | `3` | CVs a non-Pro user may create |
 | `FREE_IMPORT_LIMIT` | | `2` | AI-assisted CV imports a non-Pro user gets in total; `0` disables |
 | `FREE_AI_WEEKLY_LIMIT` | | `3` | Enhance / Optimize runs a non-Pro user gets per rolling 7 days; `0` disables |
+| `FREE_PUBLIC_LINK_LIMIT` | | `1` | Public links a non-Pro user may have online |
+| `VIEW_HASH_SECRET` | | random per start | Key for the anonymous visitor identifier; set it to keep unique-visitor counts stable across restarts |
 | `INTERVIEW_DAILY_LIMIT` / `_MONTHLY_LIMIT` | | `3` / `30` | Mock interviews a premium user may start per 24 hours / 30 days; `0` disables that window |
 | `OPENAI_STT_MODEL` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | | see `.env.example` | Voice models for the mock interview |
 | `STRIPE_API_KEY` | for checkout | — | Creating Checkout sessions |
@@ -119,6 +121,21 @@ Defined in `src/models/`, created and changed **only** through Alembic migration
 | `pro_expires_at` | `DateTime(tz)`, nullable | `NULL` while Pro = lifetime |
 | `premium_until` | `DateTime(tz)`, nullable | End of the premium level (Active Hunt); lifetime users are premium without it |
 | `created_at` / `updated_at` | `DateTime(tz)` | `updated_at` is `NULL` until the first update |
+
+### `public_links` and `link_views`
+
+`public_links`: one row per published CV — `cv_id` (unique, cascade), `user_id` (cascade),
+`slug` (unique), `is_active`, `show_email`, `show_phone`, `indexable`, `views_seen_at`.
+
+`link_views`: one row per counted visit — `link_id` (cascade), `viewed_at`, `visitor`,
+`referrer_host`.
+
+**View statistics store nothing that identifies a visitor.** `visitor` is an HMAC of the IP
+address, the user agent and the link, with a key derived from `VIEW_HASH_SECRET` and the date: it
+is the same for one person on one link during one day (so reloads are not counted twice, and
+"unique visitors" works) and cannot be turned back into an IP or followed across days or links.
+`referrer_host` is only the host of the referring page. Crawlers, link previews and scripts are
+not counted, and the same visitor within 30 minutes is one view.
 
 ### `interview_sessions`
 

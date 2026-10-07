@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # Mock interviews a premium user may start (rolling 24 hours / 30 days; 0 disables that window)
     INTERVIEW_DAILY_LIMIT: int = 3
     INTERVIEW_MONTHLY_LIMIT: int = 30
+    # Public links a non-Pro user may have switched on at once
+    FREE_PUBLIC_LINK_LIMIT: int = 1
+    # Key for the anonymous visitor identifier in view statistics. Optional: without it a
+    # random key is used until the next restart, which only makes "unique visitors" less exact
+    VIEW_HASH_SECRET: str | None = None
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:4321"
