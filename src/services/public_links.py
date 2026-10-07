@@ -17,21 +17,18 @@ from src.models.public_link import PublicLink
 from src.models.user import User
 from src.utils.sanitizer import EMAIL_RE, _looks_like_dates
 
-# ── Names ─────────────────────────────────────────────────────────────────────
+# ── Addresses ─────────────────────────────────────────────────────────────────
+#
+# A link lives at /u/<name>-<key>. The key identifies it; the name is there to be read and can
+# be anything the owner likes, including a name someone else uses.
 
 SLUG_MIN, SLUG_MAX = 3, 40
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 
-# Never available as a link name: paths the site uses or may use, and names that could be
-# mistaken for something official
-RESERVED_SLUGS = frozenset(
-    """
-    about admin administrator api app assets auth billing blog careers contact cv cvs cvstudio
-    dashboard docs editor en es faq help home index interview legal login logout me new null
-    pricing privacy pro pt public root security settings sign-in sign-up signin signup static
-    status support team terms test u undefined user users www
-    """.split()
-)
+KEY_LENGTH = 8
+KEY_RE = re.compile(r"^[a-z0-9]{8}$")
+# No 0/o, 1/l/i: keys get read aloud and typed by hand
+KEY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 
 def normalize_slug(value: str) -> str:
@@ -39,25 +36,34 @@ def normalize_slug(value: str) -> str:
 
 
 def slug_problem(slug: str) -> str | None:
-    """Why a (normalized) name cannot be used, or None when it is fine. Does not check uniqueness."""
+    """Why a (normalized) name cannot be used, or None when it is fine."""
     if not SLUG_MIN <= len(slug) <= SLUG_MAX:
         return "length"
     if not SLUG_RE.match(slug) or "--" in slug:
         return "format"
-    if slug in RESERVED_SLUGS:
-        return "reserved"
     return None
+
+
+def new_key() -> str:
+    """A random key. 31^8 possibilities: not guessable, and collisions are retried by the caller."""
+    return "".join(secrets.choice(KEY_ALPHABET) for _ in range(KEY_LENGTH))
+
+
+def key_from_ref(ref: str) -> str | None:
+    """
+    The key in a public address: "juan-perez-k7f2m9qx" → "k7f2m9qx". The name in front is
+    ignored for lookup, so a link keeps working after its owner renames it.
+    """
+    candidate = ref.strip().lower().rsplit("-", 1)[-1]
+    return candidate if KEY_RE.match(candidate) else None
 
 
 # ── Lookup ────────────────────────────────────────────────────────────────────
 
 
-async def find_public_link(db: AsyncSession, *, slug: str) -> PublicLink | None:
-    """
-    The link a public request refers to, whatever its state. Kept as the single entry point so
-    that other ways of addressing a link (a custom domain) have one place to be added.
-    """
-    result = await db.execute(select(PublicLink).where(PublicLink.slug == normalize_slug(slug)))
+async def find_public_link(db: AsyncSession, *, key: str) -> PublicLink | None:
+    """The link a public request refers to, whatever its state."""
+    result = await db.execute(select(PublicLink).where(PublicLink.key == key))
     return result.scalar_one_or_none()
 
 

@@ -9,8 +9,10 @@ from src.core.config import settings
 from src.models.public_link import LinkView, PublicLink
 from src.models.user import User
 from src.services.public_links import (
-    RESERVED_SLUGS,
+    KEY_ALPHABET,
     is_bot,
+    key_from_ref,
+    new_key,
     public_content,
     referrer_host,
     slug_problem,
@@ -38,8 +40,21 @@ async def make_cv(client, title="CV", content=None):
     return response.json()["id"]
 
 
+# name -> "<name>-<key>" of the link most recently saved under that name
+ADDRESSES: dict[str, str] = {}
+
+
+def ref(name: str) -> str:
+    """The public address (what follows /u/) of the link saved as `name`."""
+    return ADDRESSES[name]
+
+
 async def publish(client, cv_id, slug="jane-doe", **options):
-    return await client.put(f"{API}/cvs/{cv_id}/link", json={"slug": slug, **options})
+    response = await client.put(f"{API}/cvs/{cv_id}/link", json={"slug": slug, **options})
+    if response.status_code == 200:
+        link = response.json()
+        ADDRESSES[link["slug"]] = f"{link['slug']}-{link['key']}"
+    return response
 
 
 async def make_pro(db, user_id=USER):
@@ -86,18 +101,43 @@ def test_valid_names(slug):
         ("josé", "format"),
         ("a/b", "format"),
         ("../x", "format"),
-        ("admin", "reserved"),
-        ("pricing", "reserved"),
-        ("sign-in", "reserved"),
-        ("api", "reserved"),
     ],
 )
 def test_invalid_names(slug, reason):
     assert slug_problem(slug) == reason
 
 
-def test_reserved_names_cover_the_site_paths():
-    assert {"app", "pricing", "privacy", "sign-in", "sign-up", "login", "en", "pt", "u", "www"} <= RESERVED_SLUGS
+def test_names_need_not_avoid_site_paths():
+    # The key at the end keeps a link from ever colliding with a page of the site
+    for name in ("admin", "pricing", "app", "sign-in"):
+        assert slug_problem(name) is None
+
+
+def test_keys():
+    keys = {new_key() for _ in range(500)}
+    assert len(keys) == 500
+    assert all(len(key) == 8 and set(key) <= set(KEY_ALPHABET) for key in keys)
+    # Nothing that is easily confused when read aloud
+    assert not set("01ilo") & set(KEY_ALPHABET)
+
+
+@pytest.mark.parametrize(
+    ("address", "key"),
+    [
+        ("juan-perez-k7f2m9qx", "k7f2m9qx"),
+        ("k7f2m9qx", "k7f2m9qx"),
+        ("JUAN-K7F2M9QX", "k7f2m9qx"),
+        ("a-b-c-d-abcd2345", "abcd2345"),
+        ("juan-perez", None),
+        ("juan-perez-short", None),
+        ("juan-perez-toolongkey9", None),
+        ("juan-perez-k7f2_9qx", None),
+        ("", None),
+        ("../../etc-passwdxx", "passwdxx"),
+    ],
+)
+def test_key_from_address(address, key):
+    assert key_from_ref(address) == key
 
 
 # ── Publishing ────────────────────────────────────────────────────────────────
@@ -114,11 +154,14 @@ async def test_publish_and_read_publicly(client, db):
     assert (link["show_email"], link["show_phone"], link["indexable"]) == (True, False, False)
     assert (link["views_total"], link["views_new"]) == (0, 0)
 
-    public = await client.get(f"{API}/public/cv/JANE-doe")
+    assert len(link["key"]) == 8
+
+    public = await client.get(f"{API}/public/cv/{ref('jane-doe').upper()}")
     assert public.status_code == 200
     assert "max-age" in public.headers["cache-control"]
     body = public.json()
-    assert set(body) == {"slug", "title", "language", "theme", "content", "badge", "indexable", "updated_at"}
+    assert set(body) == {"key", "slug", "title", "language", "theme", "content", "badge", "indexable", "updated_at"}
+    assert (body["key"], body["slug"]) == (link["key"], "jane-doe")
     assert (body["title"], body["theme"], body["badge"], body["indexable"]) == ("Backend CV", "modern", True, False)
     # Phone hidden by default, e-mail shown; nothing identifies the account
     assert body["content"]["personal"]["email"] == "jane@example.com"
@@ -131,7 +174,7 @@ async def test_contact_details_follow_the_owners_choice(client, db):
     cv_id = await make_cv(client)
 
     await publish(client, cv_id, show_email=False, show_phone=True)
-    personal = (await client.get(f"{API}/public/cv/jane-doe")).json()["content"]["personal"]
+    personal = (await client.get(f"{API}/public/cv/{ref('jane-doe')}")).json()["content"]["personal"]
     assert (personal["email"], personal["phone"], personal["name"]) == ("", "+1 555 0100", "Jane Doe")
 
     # The stored CV is untouched
@@ -159,8 +202,8 @@ async def test_switching_off_and_deleting(client, db):
     await publish(client, cv_id)
 
     await publish(client, cv_id, is_active=False)
-    assert (await client.get(f"{API}/public/cv/jane-doe")).status_code == 404
-    assert (await view(client, "jane-doe")).status_code == 404
+    assert (await client.get(f"{API}/public/cv/{ref('jane-doe')}")).status_code == 404
+    assert (await view(client, ref("jane-doe"))).status_code == 404
     # Still the owner's: listed, and the name is kept
     assert [(link["slug"], link["is_active"]) for link in (await client.get(f"{API}/links")).json()] == [
         ("jane-doe", False)
@@ -171,50 +214,79 @@ async def test_switching_off_and_deleting(client, db):
     assert (await client.delete(f"{API}/cvs/{cv_id}/link")).status_code == 404
 
 
-async def test_renaming_frees_the_old_name(client, db):
+async def test_renaming_keeps_the_key_so_old_addresses_still_work(client, db):
     cv_id = await make_cv(client)
-    await publish(client, cv_id, slug="old-name")
+    first = (await publish(client, cv_id, slug="old-name")).json()
+    old_address = ref("old-name")
 
-    assert (await publish(client, cv_id, slug="new-name")).status_code == 200
+    renamed = await publish(client, cv_id, slug="new-name")
 
-    assert (await client.get(f"{API}/public/cv/old-name")).status_code == 404
-    assert (await client.get(f"{API}/public/cv/new-name")).status_code == 200
+    assert renamed.status_code == 200
+    assert renamed.json()["key"] == first["key"]
+    # Found by key whatever name is in front; the answer carries the current name
+    for address in (old_address, ref("new-name"), first["key"], f"anything-at-all-{first['key']}"):
+        response = await client.get(f"{API}/public/cv/{address}")
+        assert (response.status_code, response.json()["slug"]) == (200, "new-name"), address
     assert (await db.execute(select(func.count()).select_from(PublicLink))).scalar_one() == 1
 
 
-@pytest.mark.parametrize("slug", ["ab", "admin", "juan perez", "-x-", ""])
+async def test_deleting_and_publishing_again_gives_a_new_key(client, db):
+    cv_id = await make_cv(client)
+    await publish(client, cv_id)
+    old_address = ref("jane-doe")
+
+    await client.delete(f"{API}/cvs/{cv_id}/link")
+    await publish(client, cv_id)
+
+    assert ref("jane-doe") != old_address
+    assert (await client.get(f"{API}/public/cv/{old_address}")).status_code == 404
+    assert (await client.get(f"{API}/public/cv/{ref('jane-doe')}")).status_code == 200
+
+
+@pytest.mark.parametrize("slug", ["ab", "juan perez", "-x-", "a--b", "a" * 41, ""])
 async def test_bad_names_are_rejected(client, slug):
     cv_id = await make_cv(client)
     assert (await publish(client, cv_id, slug=slug)).status_code == 422
 
 
-async def test_names_are_unique_across_users(client, db, current_user):
-    mine = await make_cv(client)
-    await publish(client, mine, slug="shared-name")
+async def test_two_people_can_use_the_same_name(client, db, current_user):
+    mine = await make_cv(client, content={"personal": {"name": "Juan Pérez (uno)"}})
+    await publish(client, mine, slug="juan-perez")
+    my_address = ref("juan-perez")
     current_user["id"] = "user_other"
-    theirs = await make_cv(client)
+    theirs = await make_cv(client, content={"personal": {"name": "Juan Pérez (dos)"}})
 
-    taken = await publish(client, theirs, slug="Shared-Name")
-    assert taken.status_code == 409
+    same = await publish(client, theirs, slug="Juan-Perez")
 
-    check = (await client.get(f"{API}/links/check", params={"slug": "shared-name"})).json()
-    assert (check["available"], check["reason"]) == (False, "taken")
+    assert same.status_code == 200
+    assert ref("juan-perez") != my_address
+    names = [
+        (await client.get(f"{API}/public/cv/{address}")).json()["content"]["personal"]["name"]
+        for address in (my_address, ref("juan-perez"))
+    ]
+    assert names == ["Juan Pérez (uno)", "Juan Pérez (dos)"]
 
 
-async def test_name_check(client, db):
+async def test_a_key_clash_is_retried(client, db, monkeypatch):
+    first, second = await make_cv(client, "A"), await make_cv(client, "B")
+    await make_pro(db)
+    taken = (await publish(client, first, slug="first")).json()["key"]
+    keys = iter([taken, taken, "freshkey"])
+    monkeypatch.setattr("src.api.routers.links.new_key", lambda: next(keys))
+
+    saved = await publish(client, second, slug="second")
+
+    assert (saved.status_code, saved.json()["key"]) == (200, "freshkey")
+
+
+async def test_addresses_that_cannot_exist_are_404(client, db):
     cv_id = await make_cv(client)
-    await publish(client, cv_id, slug="mine")
+    await publish(client, cv_id)
 
-    async def check(slug, **params):
-        return (await client.get(f"{API}/links/check", params={"slug": slug, **params})).json()
-
-    assert (await check("Free-Name")) == {"slug": "free-name", "available": True, "reason": None}
-    assert (await check("ab"))["reason"] == "length"
-    assert (await check("admin"))["reason"] == "reserved"
-    assert (await check("a b"))["reason"] == "format"
-    # Taken by another of my CVs, but fine for the CV that holds it
-    assert (await check("mine"))["reason"] == "taken"
-    assert (await check("mine", cv_id=cv_id))["available"] is True
+    for address in ("jane-doe", "jane-doe-", "nokeyhere", "jane-doe-aaaaaaaa", "x" * 300):
+        assert (await client.get(f"{API}/public/cv/{address}")).status_code == 404, address
+        assert (await view(client, address)).status_code == 404, address
+    assert await views(db) == 0
 
 
 async def test_links_belong_to_their_owner(client, db, current_user):
@@ -230,6 +302,8 @@ async def test_links_belong_to_their_owner(client, db, current_user):
     await client.post(f"{API}/links/seen")
     link = (await db.execute(select(PublicLink))).scalar_one()
     assert (link.slug, link.views_seen_at) == ("jane-doe", None)
+    # Knowing the address gives a stranger the public page, nothing more
+    assert (await client.get(f"{API}/public/cv/{ref('jane-doe')}")).status_code == 200
 
 
 async def test_deleting_the_cv_or_the_account_removes_the_link(client, db):
@@ -237,15 +311,15 @@ async def test_deleting_the_cv_or_the_account_removes_the_link(client, db):
     await make_pro(db)
     await publish(client, first, slug="first")
     await publish(client, second, slug="second")
-    await view(client, "first")
+    await view(client, ref("first"))
 
     await client.delete(f"{API}/cvs/{first}")
-    assert (await client.get(f"{API}/public/cv/first")).status_code == 404
+    assert (await client.get(f"{API}/public/cv/{ref('first')}")).status_code == 404
     assert await views(db) == 0
 
     await db.delete((await db.execute(select(User).where(User.id == USER))).scalar_one())
     await db.commit()
-    assert (await client.get(f"{API}/public/cv/second")).status_code == 404
+    assert (await client.get(f"{API}/public/cv/{ref('second')}")).status_code == 404
     assert (await db.execute(select(func.count()).select_from(PublicLink))).scalar_one() == 0
 
 
@@ -275,7 +349,7 @@ async def test_pro_has_no_limit_and_no_badge(client, db):
         cv_id = await make_cv(client, f"CV {index}")
         assert (await publish(client, cv_id, slug=f"link-{index}")).status_code == 200
 
-    assert (await client.get(f"{API}/public/cv/link-2")).json()["badge"] is False
+    assert (await client.get(f"{API}/public/cv/{ref('link-2')}")).json()["badge"] is False
     assert [link["paused"] for link in (await client.get(f"{API}/links")).json()] == [False] * 3
 
 
@@ -291,10 +365,10 @@ async def test_when_pro_ends_only_the_oldest_link_stays_online(client, db):
     user.pro_expires_at = datetime.now(UTC) - timedelta(minutes=1)
     await db.commit()
 
-    statuses = [(await client.get(f"{API}/public/cv/link-{i}")).status_code for i in range(3)]
+    statuses = [(await client.get(f"{API}/public/cv/{ref(f'link-{i}')}")).status_code for i in range(3)]
     assert statuses == [200, 404, 404]
-    assert (await client.get(f"{API}/public/cv/link-0")).json()["badge"] is True
-    assert (await view(client, "link-1")).status_code == 404
+    assert (await client.get(f"{API}/public/cv/{ref('link-0')}")).json()["badge"] is True
+    assert (await view(client, ref("link-1"))).status_code == 404
 
     listed = (await client.get(f"{API}/links")).json()
     assert [(link["slug"], link["paused"]) for link in listed] == [
@@ -304,7 +378,7 @@ async def test_when_pro_ends_only_the_oldest_link_stays_online(client, db):
     ]
     # Nothing was deleted: upgrading again brings them back
     await make_pro(db)
-    assert (await client.get(f"{API}/public/cv/link-2")).status_code == 200
+    assert (await client.get(f"{API}/public/cv/{ref('link-2')}")).status_code == 200
 
 
 async def test_free_links_can_be_switched_off_altogether(client, db, monkeypatch):
@@ -320,16 +394,16 @@ async def test_views_are_counted_once_per_visitor_per_half_hour(client, db):
     cv_id = await make_cv(client)
     await publish(client, cv_id)
 
-    assert (await view(client, "jane-doe", ip="203.0.113.7")).status_code == 204
-    await view(client, "jane-doe", ip="203.0.113.7")
-    await view(client, "jane-doe", ip="203.0.113.8")
+    assert (await view(client, ref("jane-doe"), ip="203.0.113.7")).status_code == 204
+    await view(client, ref("jane-doe"), ip="203.0.113.7")
+    await view(client, ref("jane-doe"), ip="203.0.113.8")
     assert await views(db) == 2
 
     # The same visitor an hour later is a new view
     for row in (await db.execute(select(LinkView))).scalars():
         row.viewed_at = datetime.now(UTC) - timedelta(minutes=31)
     await db.commit()
-    await view(client, "jane-doe", ip="203.0.113.7")
+    await view(client, ref("jane-doe"), ip="203.0.113.7")
     assert await views(db) == 3
 
 
@@ -350,7 +424,7 @@ async def test_bots_and_previews_are_not_views(client, db, agent):
     cv_id = await make_cv(client)
     await publish(client, cv_id)
 
-    assert (await view(client, "jane-doe", agent=agent)).status_code == 204
+    assert (await view(client, ref("jane-doe"), agent=agent)).status_code == 204
     assert await views(db) == 0
 
 
@@ -358,7 +432,9 @@ async def test_nothing_that_identifies_a_visitor_is_stored(client, db):
     cv_id = await make_cv(client)
     await publish(client, cv_id)
 
-    await view(client, "jane-doe", ip="203.0.113.99", referrer="https://www.linkedin.com/in/someone?trk=secret#frag")
+    await view(
+        client, ref("jane-doe"), ip="203.0.113.99", referrer="https://www.linkedin.com/in/someone?trk=secret#frag"
+    )
 
     row = (await db.execute(select(LinkView))).scalar_one()
     assert row.referrer_host == "linkedin.com"
@@ -413,16 +489,18 @@ async def test_view_without_a_body_and_with_junk(client, db):
     cv_id = await make_cv(client)
     await publish(client, cv_id)
 
-    plain = await client.post(f"{API}/public/cv/jane-doe/view", headers={**BROWSER, "X-Forwarded-For": "198.51.100.1"})
+    plain = await client.post(
+        f"{API}/public/cv/{ref('jane-doe')}/view", headers={**BROWSER, "X-Forwarded-For": "198.51.100.1"}
+    )
     junk = await client.post(
-        f"{API}/public/cv/jane-doe/view",
+        f"{API}/public/cv/{ref('jane-doe')}/view",
         json={"referrer": "x" * 3000},
         headers={**BROWSER, "X-Forwarded-For": "198.51.100.2"},
     )
 
     assert (plain.status_code, junk.status_code) == (204, 422)
     assert await views(db) == 1
-    assert (await view(client, "no-such-link")).status_code == 404
+    assert (await view(client, "no-such-link-aaaaaaaa")).status_code == 404
 
 
 # ── Statistics ────────────────────────────────────────────────────────────────
@@ -485,7 +563,7 @@ async def test_new_views_until_the_owner_has_looked(client, db):
     seen = (await client.get(f"{API}/links")).json()[0]
     assert (seen["views_total"], seen["views_new"]) == (5, 0)
 
-    await view(client, "jane-doe", ip="198.51.100.50")
+    await view(client, ref("jane-doe"), ip="198.51.100.50")
     after = (await client.get(f"{API}/links")).json()[0]
     assert (after["views_total"], after["views_new"]) == (6, 1)
 
