@@ -161,6 +161,29 @@ shape gets `400` `Unsupported request. Use POST /ai/rewrite.` Remove once no dep
 { "cover_letter": "Jane Doe\nMexico City\njane@example.com\n+52…\n2026-10-06\n\nDear Hiring Manager, …" }
 ```
 
+### `POST /ai/import`
+
+Turns the text of an existing resume into a structured CV. The client extracts the text (from a
+PDF, or from a JSON / YAML / TOML / XML file whose schema it does not recognise); no file is uploaded.
+
+```json
+{ "text": "string, up to 60 000 characters", "source": "pdf | structured", "language": "es | en | pt (optional)" }
+```
+```json
+{ "cv": { "personal": { }, "experience": [ ], "education": [ ], "skills": [ ], "certifications": [ ],
+          "projects": [ ], "languages": "", "interests": "", "language": "ES | EN | PT | null" },
+  "remaining_free_imports": 1 }
+```
+
+Unlike the other AI routes this one is **not Pro-only**: a non-Pro user gets `FREE_IMPORT_LIMIT`
+(2) imports in total, then `403` `Free import limit reached. Upgrade to Pro to import more CVs.`
+Pro users share the normal AI rate limit (`429`) and get `"remaining_free_imports": null`.
+`422` `No CV content could be read from this document.` when the model finds nothing. An import
+that fails (`422`, `502`, `503`) does not count against the allowance.
+
+The returned CV has no ids; items are in the shape of the frontend's `CVData`, dates are
+`YYYY-MM` or `""`.
+
 ### `POST /ai/ats`
 
 ```json
