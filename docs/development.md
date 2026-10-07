@@ -168,6 +168,18 @@ Dependabot (`.github/dependabot.yml`) proposes pip updates weekly and Actions / 
 monthly. Setup of the deploy secrets and the full contributor workflow are in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
+## Monitoring
+
+| What | Where | Tells you |
+| :--- | :--- | :--- |
+| Railway health check | Service → Settings → Health check path = `/health` | A release that does not come up never replaces the running one |
+| Uptime check | `.github/workflows/uptime.yml`, every 15 minutes | Opens an issue labelled `incident` when the API or the site is down and closes it on recovery. Watch the repository (or its issues) to get the email |
+| Error reporting | Sentry, enabled by `SENTRY_DSN` | Unhandled errors and failed provider calls, without request data |
+
+Test the alert without breaking anything: *Actions → Uptime → Run workflow* with
+`backend_url` set to an address that does not exist. An incident issue opens; the next normal run
+closes it.
+
 ## Admin scripts
 
 Run from the repo root (or `docker compose exec api …`).

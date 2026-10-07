@@ -148,6 +148,8 @@ merge to main ─▶ CI ─▶ Deploy: approval (production environment) ─▶ 
 | … → *Variables* | `RAILWAY_SERVICE` = the backend service's name or id; `BACKEND_URL` = its public URL, e.g. `https://api.cvstudio.tools` |
 | GitHub → Settings → Environments → `production` | Required reviewers (who may approve a deploy) |
 | Railway → service → Settings → Source | **Disable automatic deploys** from GitHub, otherwise every commit is deployed twice |
+| Railway → backend service → Settings | Health check path `/health`; variable `SENTRY_DSN` (optional, enables error reporting) |
+| GitHub → Settings → Secrets and variables → Actions → *Variables* | `SITE_URL` = the public site, used by the uptime check |
 | GitHub → Settings → Code security | Enable *Private vulnerability reporting* (used by `SECURITY.md`) and *Secret scanning* with push protection |
 
 Until `RAILWAY_TOKEN` and `RAILWAY_SERVICE` exist, the deploy workflow skips itself with a warning.

@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     AI_RATE_LIMIT_PER_HOUR: int = 20
     AI_RATE_LIMIT_PER_DAY: int = 100
 
+    # Error reporting (optional). Without a DSN nothing is sent anywhere.
+    SENTRY_DSN: str | None = None
+
     # Plans
     FREE_CV_LIMIT: int = 3
 
