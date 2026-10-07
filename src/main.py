@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import ai, billing, cv, interviews, links, public, users, webhooks
+from src.api.routers import ai, billing, cv, interviews, links, public, recruiter_billing, users, webhooks
 from src.api.routers import promo as promo_router
 from src.core.config import settings
 from src.core.observability import init_error_reporting
@@ -40,6 +40,7 @@ app.include_router(billing.router, prefix="/api/v1")
 app.include_router(interviews.router, prefix="/api/v1")
 app.include_router(links.router, prefix="/api/v1")
 app.include_router(public.router, prefix="/api/v1")
+app.include_router(recruiter_billing.router, prefix="/api/v1")
 app.include_router(promo_router.router, prefix="/api/v1")
 
 

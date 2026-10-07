@@ -97,6 +97,10 @@ variable stops the process (and Alembic, and the tests) immediately.
 | `FREE_CV_LIMIT` | | `3` | CVs a non-Pro user may create |
 | `FREE_IMPORT_LIMIT` | | `2` | AI-assisted CV imports a non-Pro user gets in total; `0` disables |
 | `FREE_AI_WEEKLY_LIMIT` | | `3` | Enhance / Optimize runs a non-Pro user gets per rolling 7 days; `0` disables |
+| `STRIPE_PRICE_RECRUITER_STARTER` / `_PRO` | for recruiter plans | — | Recurring monthly prices |
+| `RECRUITER_STARTER_MONTHLY` / `RECRUITER_PRO_MONTHLY` | | `100` / `1000` | CVs evaluated per billing month |
+| `RECRUITER_TRIAL_CVS` | | `10` | CVs a user may evaluate for free, in total |
+| `RECRUITER_RETENTION_DAYS` | | `90` | Days candidate data is kept |
 | `FREE_PUBLIC_LINK_LIMIT` | | `1` | Public links a non-Pro user may have online |
 | `VIEW_HASH_SECRET` | | random per start | Key for the anonymous visitor identifier; set it to keep unique-visitor counts stable across restarts |
 | `INTERVIEW_DAILY_LIMIT` / `_MONTHLY_LIMIT` | | `3` / `30` | Mock interviews a premium user may start per 24 hours / 30 days; `0` disables that window |
@@ -121,6 +125,12 @@ Defined in `src/models/`, created and changed **only** through Alembic migration
 | `pro_expires_at` | `DateTime(tz)`, nullable | `NULL` while Pro = lifetime |
 | `premium_until` | `DateTime(tz)`, nullable | End of the premium level (Active Hunt); lifetime users are premium without it |
 | `created_at` / `updated_at` | `DateTime(tz)` | `updated_at` is `NULL` until the first update |
+
+### `recruiter_subscriptions`
+
+One row per user with a recruiter plan: `plan`, `status`, `current_period_start` / `_end`,
+`stripe_customer_id`, `stripe_subscription_id`, `last_event_at` (ordering of Stripe events), and
+the Enterprise overrides `monthly_quota` and `retention_days`. Deleted with the user.
 
 ### `public_links` and `link_views`
 

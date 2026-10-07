@@ -44,6 +44,9 @@ Details are written for end users — provider and internal errors are logged, n
 | `GET` | `/cvs/{cv_id}/link/stats` | ✅ | details: Pro | View statistics of a link |
 | `GET` | `/public/cv/{ref}` | **none** | — | The published CV, as anyone may read it |
 | `POST` | `/public/cv/{ref}/view` | **none** | — | Count one visit |
+| `GET` | `/recruiter/me` | ✅ | — | Recruiter plan, usage and what is left |
+| `POST` | `/recruiter/billing/checkout` | ✅ | — | Start a recruiter subscription |
+| `POST` | `/recruiter/billing/portal` | ✅ | — | Open Stripe's page to manage the subscription |
 | `POST` | `/billing/create-checkout-session` | ✅ | — | Start a Stripe Checkout |
 | `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code |
 | `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed / refunded |
@@ -401,6 +404,33 @@ Body `{ "referrer": "https://…" }` (optional). `204`. See *View statistics* in
 The session is `mode="payment"` (one-off), with `client_reference_id` = the Clerk user id and
 `metadata.plan_duration` = `plan_type`. Success returns the browser to
 `{FRONTEND_URL}/app/dashboard?session_id=…`, cancel to `{FRONTEND_URL}/app/dashboard`.
+
+## Recruiter plans
+
+See [auth-plans-billing.md](./auth-plans-billing.md#recruiter-subscriptions).
+
+### `GET /recruiter/me`
+
+```json
+{ "plan": "trial | starter | pro | enterprise", "status": "trial | active | past_due | canceled",
+  "can_evaluate": true, "used": 37, "limit": 100, "remaining": 63,
+  "period_end": "2026-11-07T00:00:00Z", "retention_days": 90,
+  "reason": null, "has_billing": true }
+```
+
+`limit` and `remaining` are `null` for an unlimited plan. `reason` says why evaluating is
+refused when `can_evaluate` is false. `has_billing` tells the UI whether the portal can be opened.
+
+### `POST /recruiter/billing/checkout`
+
+`{ "plan": "starter" | "pro" }` → `{ "url": "https://checkout.stripe.com/…" }`. `409` when the
+user already has a running subscription (they change it in the portal), `503` when the price is
+not configured, `502` on a Stripe failure.
+
+### `POST /recruiter/billing/portal`
+
+→ `{ "url": "https://billing.stripe.com/…" }`. `404` when the user never had a Stripe
+subscription.
 
 ## Promo codes
 

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     STRIPE_PRICE_7D: str | None = None
     STRIPE_PRICE_30D: str | None = None
     STRIPE_PRICE_LIFETIME: str | None = None
+    # Recruiter subscriptions (recurring monthly prices)
+    STRIPE_PRICE_RECRUITER_STARTER: str | None = None
+    STRIPE_PRICE_RECRUITER_PRO: str | None = None
 
     # AI
     OPENAI_API_KEY: str | None = None
@@ -64,6 +67,12 @@ class Settings(BaseSettings):
     INTERVIEW_MONTHLY_LIMIT: int = 30
     # Public links a non-Pro user may have switched on at once
     FREE_PUBLIC_LINK_LIMIT: int = 1
+    # Recruiter area: CVs evaluated per billing month on each plan, the free trial (in total,
+    # once), and how long candidate data is kept
+    RECRUITER_STARTER_MONTHLY: int = 100
+    RECRUITER_PRO_MONTHLY: int = 1000
+    RECRUITER_TRIAL_CVS: int = 10
+    RECRUITER_RETENTION_DAYS: int = 90
     # Key for the anonymous visitor identifier in view statistics. Optional: without it a
     # random key is used until the next restart, which only makes "unique visitors" less exact
     VIEW_HASH_SECRET: str | None = None
