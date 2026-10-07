@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     AI_RATE_LIMIT_PER_HOUR: int = 20
     AI_RATE_LIMIT_PER_DAY: int = 100
+    # Voice for the mock interview
+    OPENAI_STT_MODEL: str = "gpt-4o-mini-transcribe"
+    OPENAI_TTS_MODEL: str = "gpt-4o-mini-tts"
+    OPENAI_TTS_VOICE: str = "sage"
 
     # Error reporting (optional). Without a DSN nothing is sent anywhere.
     SENTRY_DSN: str | None = None
@@ -55,6 +59,9 @@ class Settings(BaseSettings):
     FREE_IMPORT_LIMIT: int = 2
     # Enhance / Optimize runs a non-Pro user gets per rolling 7 days (0 disables them)
     FREE_AI_WEEKLY_LIMIT: int = 3
+    # Mock interviews a premium user may start (rolling 24 hours / 30 days; 0 disables that window)
+    INTERVIEW_DAILY_LIMIT: int = 3
+    INTERVIEW_MONTHLY_LIMIT: int = 30
 
     # Frontend
     FRONTEND_URL: str = "http://localhost:4321"

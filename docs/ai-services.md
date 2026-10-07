@@ -162,3 +162,53 @@ Provider messages never reach the client. Look in the server log for the cause.
 | Mask more fields | `PERSONAL_FIELDS_TO_REDACT` in `sanitizer.py` (masking and restoring both use it) — extend `test/test_sanitizer.py` |
 | Change limits | `AI_RATE_LIMIT_PER_HOUR` / `AI_RATE_LIMIT_PER_DAY` / `FREE_IMPORT_LIMIT` settings |
 | Add an AI endpoint | A function in `services/ai/` (mask first), a request schema in `schemas/ai_schemas.py` with size limits, a route in `routers/ai.py` using `Depends(enforce_ai_quota)` and `async with ai_errors(...)`, a test in `test/test_ai.py` with `FakeOpenAI`, and a client method in the frontend's `src/lib/api.ts` |
+
+## Mock interview
+
+Code: `src/services/ai/interview.py`, routes in `src/api/routers/interviews.py`, storage in
+`interview_sessions`. Premium only (`require_premium`).
+
+A spoken, turn-by-turn conversation with a recruiter that knows the CV and the job posting:
+
+```
+POST /interviews            plan_interview()   questions from the masked CV + posting
+  loop:
+    GET  …/turns/{n}/audio  synthesize()       recruiter's line → MP3
+    POST …/answer           transcribe()       recording → text   (or typed text)
+                            recruiter_reply()  one-sentence reaction + optional follow-up
+POST …/finish               write_report()     score, per-answer feedback, sample answers
+```
+
+**The server drives the conversation, not the model.** The questions are fixed when the session
+starts, and the code decides what happens after each answer: a follow-up (at most one per
+question), the next question, or the closing. The model only writes short pieces of text. That
+gives every interview a known maximum length: `question_count` questions, at most twice that many
+answers.
+
+What bounds the cost of one interview:
+
+| Limit | Value |
+| :--- | :--- |
+| Interviews per user | `INTERVIEW_DAILY_LIMIT` (3) per 24 h, `INTERVIEW_MONTHLY_LIMIT` (30) per 30 days |
+| Questions | 4–8, one follow-up each at most |
+| A recording | 5 MB; the transcript is cut at 4 000 characters |
+| Speech | only text the server wrote, at most twice per recruiter turn |
+| Session lifetime | 2 hours |
+
+Models: chat uses `OPENAI_MODEL`; speech-to-text `OPENAI_STT_MODEL` (`gpt-4o-mini-transcribe`);
+text-to-speech `OPENAI_TTS_MODEL` (`gpt-4o-mini-tts`) with voice `OPENAI_TTS_VOICE` (`sage`).
+
+Privacy:
+
+- The CV is masked with `mask_cv_pii` before question planning. The greeting uses the candidate's
+  first name, added by the server, so the model never needs it.
+- **What the candidate says is sent to the provider as it is.** A spoken answer cannot be masked
+  the way a CV field can. The privacy policy says so.
+- Audio is never stored: recordings are passed to the transcription call and dropped; speech is
+  generated on request and streamed back. Transcripts, questions, the job posting and the report
+  are stored until the user deletes the interview or their account.
+
+All model output is validated and trimmed (`GeneratedPlan`, `GeneratedReply`, `Report` in
+`src/schemas/interview_schemas.py`); the report only keeps feedback for questions that were
+actually answered. Answers and the posting reach the model inside data tags, never in the
+instructions.

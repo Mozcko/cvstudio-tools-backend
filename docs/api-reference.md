@@ -32,6 +32,12 @@ Details are written for end users — provider and internal errors are logged, n
 | `POST` | `/ai/improve` | ✅ | ✅ | **Deprecated** shim for `/ai/rewrite` |
 | `POST` | `/ai/cover-letter` | ✅ | ✅ | Generate a cover letter |
 | `POST` | `/ai/ats` | ✅ | ✅ | ATS simulation |
+| `POST` | `/interviews` | ✅ | premium | Start a mock interview |
+| `GET` | `/interviews` | ✅ | premium | Own interviews, newest first |
+| `GET` / `DELETE` | `/interviews/{id}` | ✅ | premium | One interview with its transcript and report / delete it |
+| `POST` | `/interviews/{id}/answer` | ✅ | premium | Answer the current question (audio or text) |
+| `GET` | `/interviews/{id}/turns/{n}/audio` | ✅ | premium | Speech for something the recruiter said |
+| `POST` | `/interviews/{id}/finish` | ✅ | premium | End the interview and get the report |
 | `POST` | `/billing/create-checkout-session` | ✅ | — | Start a Stripe Checkout |
 | `POST` | `/promo/redeem` | ✅ | — | Redeem a promo code |
 | `POST` | `/webhooks/stripe` | Stripe signature | — | Payment completed / refunded |
@@ -63,7 +69,9 @@ Returns the caller's user, creating the row on first sight and applying Pro expi
   "premium_until": null,
   "usage": {
     "free_ai":      { "limit": 3, "remaining": 2, "resets_at": null },
-    "free_imports": { "limit": 2, "remaining": 2, "resets_at": null }
+    "free_imports": { "limit": 2, "remaining": 2, "resets_at": null },
+    "interviews_daily":   { "limit": 3,  "remaining": 3,  "resets_at": null },
+    "interviews_monthly": { "limit": 30, "remaining": 30, "resets_at": null }
   }
 }
 ```
@@ -220,6 +228,81 @@ The returned CV has no ids; items are in the shape of the frontend's `CVData`, d
 ```
 
 The object is the model's JSON answer; its fields are requested by the prompt, not validated.
+
+## Mock interview
+
+Premium only (Active Hunt and Lifetime): everyone else gets `403`
+`This feature requires the Active Hunt or Lifetime plan.` on every route. Someone else's
+interview is `404`. See [ai-services.md](./ai-services.md#mock-interview) for how it works.
+
+### `POST /interviews` → `201`
+
+```json
+{ "cv_content": { }, "job_description": "20 to 20 000 characters", "language": "es | en | pt",
+  "question_count": 6 }
+```
+
+`question_count` is 4 to 8 (default 6). Returns the session (shape below) with the recruiter's
+first line. `429` with `Retry-After` when the user has started `INTERVIEW_DAILY_LIMIT` (3)
+interviews in the last 24 hours or `INTERVIEW_MONTHLY_LIMIT` (30) in the last 30 days. An
+interview only counts once its questions were generated.
+
+```json
+{
+  "id": "uuid", "title": "Senior Python Engineer", "language": "es",
+  "status": "active | completed", "question_count": 6, "current_question": 0, "done": false,
+  "overall_score": null, "created_at": "…", "completed_at": null,
+  "turns": [
+    { "index": 0, "role": "recruiter | candidate", "kind": "question | follow_up | answer | closing",
+      "question": 0, "text": "Hola Jane, gracias por tu tiempo… ¿…?", "at": "…" }
+  ],
+  "report": null
+}
+```
+
+`done` becomes true when the recruiter has said goodbye; `current_question` then equals
+`question_count`.
+
+### `POST /interviews/{id}/answer`
+
+The answer to the current question, in one of two forms:
+
+- **Recording:** the request body is the audio itself, with `Content-Type` `audio/webm`,
+  `audio/ogg`, `audio/mp4`, `audio/x-m4a`, `audio/mpeg` or `audio/wav` (parameters such as
+  `;codecs=opus` are fine). Up to 5 MB.
+- **Typed:** `Content-Type: application/json`, `{ "text": "…" }`, up to 4 000 characters.
+
+```json
+{ "answer": { "…the candidate turn; text is the transcript…" },
+  "reply":  { "…the recruiter turn: a follow-up, the next question or the closing…" },
+  "current_question": 1, "done": false }
+```
+
+| Status | When |
+| :--- | :--- |
+| `409` | The interview is over, expired (2 hours after it started), or this question was answered by another request |
+| `413` / `415` | Recording too large / body is neither audio nor JSON |
+| `422` | Empty recording, nothing audible in it, or empty text |
+| `502` / `503` | Provider failure / not configured. Nothing is recorded; the same answer can be sent again |
+
+### `GET /interviews/{id}/turns/{n}/audio`
+
+`audio/mpeg` for recruiter turn `n`. `404` for a turn that does not exist or was said by the
+candidate. Each interview may generate speech at most twice per recruiter turn (`429` after).
+
+### `POST /interviews/{id}/finish`
+
+Ends the interview at any point and returns the session with `status: "completed"` and:
+
+```json
+"report": {
+  "overall_score": 72, "summary": "…",
+  "strengths": ["…"], "improvements": ["…"], "tips": ["…"],
+  "answers": [ { "question": 0, "score": 7, "went_well": "…", "improve": "…", "sample_answer": "…" } ]
+}
+```
+
+`400` when no question was answered. Calling it again returns the stored report.
 
 ## Billing
 

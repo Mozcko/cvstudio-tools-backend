@@ -97,6 +97,8 @@ variable stops the process (and Alembic, and the tests) immediately.
 | `FREE_CV_LIMIT` | | `3` | CVs a non-Pro user may create |
 | `FREE_IMPORT_LIMIT` | | `2` | AI-assisted CV imports a non-Pro user gets in total; `0` disables |
 | `FREE_AI_WEEKLY_LIMIT` | | `3` | Enhance / Optimize runs a non-Pro user gets per rolling 7 days; `0` disables |
+| `INTERVIEW_DAILY_LIMIT` / `_MONTHLY_LIMIT` | | `3` / `30` | Mock interviews a premium user may start per 24 hours / 30 days; `0` disables that window |
+| `OPENAI_STT_MODEL` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | | see `.env.example` | Voice models for the mock interview |
 | `STRIPE_API_KEY` | for checkout | — | Creating Checkout sessions |
 | `STRIPE_WEBHOOK_SECRET` | for the webhook | — | Verifying Stripe webhooks |
 | `STRIPE_PRICE_7D`, `_30D`, `_LIFETIME` | for checkout | — | Stripe price ids per plan |
@@ -117,6 +119,22 @@ Defined in `src/models/`, created and changed **only** through Alembic migration
 | `pro_expires_at` | `DateTime(tz)`, nullable | `NULL` while Pro = lifetime |
 | `premium_until` | `DateTime(tz)`, nullable | End of the premium level (Active Hunt); lifetime users are premium without it |
 | `created_at` / `updated_at` | `DateTime(tz)` | `updated_at` is `NULL` until the first update |
+
+### `interview_sessions`
+
+One row per mock interview; also what the interview caps are counted from. Deleted with the user.
+
+| Column | Type | Notes |
+| :--- | :--- | :--- |
+| `id` | `UUID` PK | |
+| `user_id` | `String` FK → `users.id`, cascade | Indexed with `created_at` |
+| `title`, `language`, `job_description` | | Title is the job title found in the posting |
+| `status` | `String` | `active` or `completed` |
+| `questions` | `JSONB` | `[{type, text}]`, fixed when the session starts |
+| `turns` | `JSONB` | `[{role, kind, question, text, at}]` — text only, never audio |
+| `report` | `JSONB`, nullable | Written by `finish` |
+| `audio_count` | `Integer` | Speech generated for this session |
+| `created_at` / `completed_at` | `DateTime(tz)` | |
 
 ### `cvs`
 
