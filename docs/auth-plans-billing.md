@@ -222,3 +222,69 @@ python create_promo.py --code OPEN --uses 0 --days 7            # unlimited uses
 4. Increment `used_count`, insert the redemption, `grant_pro(user, granted_days)`, commit.
 
 `is_active` is a manual off switch; reaching the use limit does not flip it.
+
+## Recruiter subscriptions
+
+The recruiter area is a second product on the same accounts, with its own plans. It is
+**independent of the job-seeker passes**: a recruiter plan does not make someone Pro, and a pass
+does not open the recruiter area. State lives in `recruiter_subscriptions` (one row per user);
+the rules are in `src/services/recruiter_plans.py`.
+
+| Plan | How it starts | CVs evaluated | Candidate data kept |
+| :--- | :--- | :--- | :--- |
+| *(none)* — free trial | automatically | `RECRUITER_TRIAL_CVS` (10) in total, once | `RECRUITER_RETENTION_DAYS` (90) |
+| `starter` | Stripe subscription, `STRIPE_PRICE_RECRUITER_STARTER` | `RECRUITER_STARTER_MONTHLY` (100) per billing month | 90 days |
+| `pro` | Stripe subscription, `STRIPE_PRICE_RECRUITER_PRO` | `RECRUITER_PRO_MONTHLY` (1,000) per billing month | 90 days |
+| `enterprise` | agreed by hand, `grant_recruiter` script | unlimited, or the agreed `monthly_quota` | 90 days, or the agreed `retention_days` |
+
+### Stripe is the source of truth for Starter and Pro
+
+`POST /recruiter/billing/checkout` opens a Checkout session in `subscription` mode. The
+subscription carries `metadata.user_id`, so every later event can be matched to the user. Nothing
+is granted from the checkout itself; the row is written by the webhook from:
+
+| Event | Effect |
+| :--- | :--- |
+| `customer.subscription.created` / `.updated` | Plan (from the price), status and billing period are copied. Covers the first payment, renewals, upgrades, a failed payment (`past_due`) and "cancel at period end" (still `active` until the end) |
+| `customer.subscription.deleted` | `canceled` |
+
+Stripe's states map to three of ours: `active`/`trialing` → `active`; `past_due`/`unpaid` →
+`past_due`; `canceled`/`incomplete_expired` → `canceled`. `incomplete` (first payment not made)
+grants nothing. Events are applied idempotently and **an event older than the last one applied is
+ignored** (`last_event_at`), so deliveries out of order cannot resurrect a cancelled plan. News
+about a previous subscription never disturbs the current one.
+
+Changing plan, updating the card, invoices and cancelling all happen in Stripe's customer portal
+(`POST /recruiter/billing/portal`); there is no cancellation logic of our own.
+
+### May this user evaluate another CV?
+
+`entitlement(db, user)` answers it, and `GET /recruiter/me` returns it:
+
+- **Running plan** (`active`, and within the paid period): usage is counted from
+  `current_period_start` for Stripe plans, and over a rolling 30 days for plans agreed by hand.
+- **`past_due`**: evaluating is paused until the payment is fixed; the plan is not lost.
+- **Ended** (cancelled, or the paid period ran out without news from Stripe): no evaluations.
+  The free trial does not come back.
+- **No plan ever**: the trial.
+
+Usage is one row per evaluated CV in `ai_requests` under the key `recruiter:evaluate`.
+`reserve_evaluation` records it and `release_evaluation` gives it back when an evaluation fails.
+
+### Stripe setup for the recruiter plans
+
+- Two **recurring monthly** prices; their ids go in `STRIPE_PRICE_RECRUITER_STARTER` and
+  `STRIPE_PRICE_RECRUITER_PRO`.
+- The customer portal switched on (Settings → Billing → Customer portal), allowing plan changes
+  between those two prices and cancellation.
+- The existing webhook endpoint also subscribed to `customer.subscription.created`,
+  `customer.subscription.updated` and `customer.subscription.deleted`.
+
+### Enterprise
+
+```bash
+python -m src.scripts.grant_recruiter --user-id user_… [--months 12] [--quota 5000] [--retention-days 365]
+python -m src.scripts.grant_recruiter --user-id user_… --revoke
+```
+
+Refuses to touch a user with a running Stripe subscription.

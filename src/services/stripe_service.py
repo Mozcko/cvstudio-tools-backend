@@ -12,11 +12,16 @@ from src.core.config import settings
 from src.models.payment import Payment
 from src.models.user import User
 from src.services.pro import PLAN_GRANTS, grant_pro, revoke_grant
+from src.services.recruiter_plans import apply_stripe_subscription
 
 logger = logging.getLogger(__name__)
 
 
 async def _handle_checkout_paid(session: dict, db: AsyncSession) -> None:
+    if session.get("mode") == "subscription":
+        # Recruiter subscriptions are driven by the customer.subscription.* events, which carry
+        # the user id and the billing period. Nothing is granted from the checkout itself.
+        return
     if session.get("payment_status") != "paid":
         # Delayed payment methods complete later via checkout.session.async_payment_succeeded
         return
@@ -123,5 +128,9 @@ async def process_webhook_event(payload: bytes, sig_header: str, db: AsyncSessio
         await _handle_checkout_paid(obj, db)
     elif event_type == "charge.refunded":
         await _handle_charge_refunded(obj, db)
+    elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        await apply_stripe_subscription(db, obj, event.get("created"))
+    elif event_type == "customer.subscription.deleted":
+        await apply_stripe_subscription(db, obj, event.get("created"), deleted=True)
 
     return {"status": "success"}
