@@ -32,7 +32,7 @@ NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not fou
 async def _online_link(ref: str, db: AsyncSession) -> tuple[PublicLink, User]:
     """
     The link and its owner when the page is online; 404 in every other case, alike.
-    `ref` is what follows /u/ in the address: "<name>-<key>", or the key alone.
+    `ref` is the link's key (the older "<name>-<key>" form is accepted too).
     """
     key = key_from_ref(ref)
     if not key:

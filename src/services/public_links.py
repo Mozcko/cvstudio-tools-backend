@@ -19,7 +19,7 @@ from src.utils.sanitizer import EMAIL_RE, _looks_like_dates
 
 # ── Addresses ─────────────────────────────────────────────────────────────────
 #
-# A link lives at /u/<name>-<key>. The key identifies it; the name is there to be read and can
+# A link lives at /u/<key>/<name>. The key identifies it; the name is there to be read and can
 # be anything the owner likes, including a name someone else uses.
 
 SLUG_MIN, SLUG_MAX = 3, 40
@@ -51,8 +51,9 @@ def new_key() -> str:
 
 def key_from_ref(ref: str) -> str | None:
     """
-    The key in a public address: "juan-perez-k7f2m9qx" → "k7f2m9qx". The name in front is
-    ignored for lookup, so a link keeps working after its owner renames it.
+    The key in what the site asks for: normally the key itself, "k7f2m9qx". The older form
+    "juan-perez-k7f2m9qx" is still understood. The name is never used for lookup, so a link
+    keeps working after its owner renames it.
     """
     candidate = ref.strip().lower().rsplit("-", 1)[-1]
     return candidate if KEY_RE.match(candidate) else None

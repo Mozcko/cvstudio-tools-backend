@@ -15,7 +15,7 @@ class LinkWrite(BaseModel):
 
 class LinkOut(BaseModel):
     cv_id: uuid.UUID
-    # The address is /u/<slug>-<key>
+    # The address is /u/<key>/<slug>
     key: str
     slug: str
     is_active: bool

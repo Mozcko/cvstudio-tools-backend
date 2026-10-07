@@ -313,7 +313,7 @@ Ends the interview at any point and returns the session with `status: "completed
 
 ## Public links
 
-A CV can be published at `/u/<name>-<key>` on the site, e.g. `/u/juan-perez-k7f2m9qx`. One link
+A CV can be published at `/u/<key>/<name>` on the site, e.g. `/u/k7f2m9qx/juan-perez`. One link
 per CV. The **key** (8 random characters, assigned when the link is created) is what identifies
 the link; the **name** is chosen by the owner to be readable and does not have to be unique. See
 [auth-plans-billing.md](./auth-plans-billing.md) for the plan rules.
@@ -364,7 +364,7 @@ origin) are `null` for non-Pro users.
 
 ### `GET /public/cv/{ref}` — no authentication
 
-`ref` is what follows `/u/` in the address: `<name>-<key>`, or the key alone. Only the key is
+`ref` is the key (the site sends only that). The older form `<name>-<key>` is also accepted. Only the key is
 used to find the link, whatever name is in front of it; the answer carries the current `slug`
 so the site can redirect an old name to the current address.
 
