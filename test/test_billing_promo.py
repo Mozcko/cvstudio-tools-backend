@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from src.models.payment import Payment
 from src.models.promo import PromoCode
 from src.models.user import User
+from test.fakes import random_signing_secret
 from test.stripe_helpers import signed_stripe_request
 
 USER = "user_test_1"
@@ -54,7 +55,7 @@ async def test_stripe_webhook_rejects_bad_signature(client):
     assert (await client.post("/api/v1/webhooks/stripe", content=body, headers=forged)).status_code == 400
 
     # Signed with a different secret
-    body, headers = signed_stripe_request(checkout_event(), secret="whsec_someone_else")
+    body, headers = signed_stripe_request(checkout_event(), secret=random_signing_secret())
     assert (await client.post("/api/v1/webhooks/stripe", content=body, headers=headers)).status_code == 400
 
 

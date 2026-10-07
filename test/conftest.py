@@ -1,11 +1,15 @@
 import os
 
+from test.fakes import random_signing_secret
+
 # Settings are read at import time, so the environment must be ready before `src` is imported.
+# These are placeholders for the test process only: signing secrets are generated per run,
+# and the API keys are obviously fake strings that no provider would accept.
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/cvstudio_test")
 os.environ.setdefault("CLERK_ISSUER", "https://clerk.test.example")
-os.environ.setdefault("CLERK_WEBHOOK_SECRET", "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")
-os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "whsec_test")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+os.environ.setdefault("CLERK_WEBHOOK_SECRET", random_signing_secret())
+os.environ.setdefault("STRIPE_WEBHOOK_SECRET", random_signing_secret())
+os.environ.setdefault("OPENAI_API_KEY", "not-a-real-key")
 
 import pytest
 import pytest_asyncio

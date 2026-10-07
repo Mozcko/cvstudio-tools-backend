@@ -7,6 +7,7 @@ from svix.webhooks import Webhook
 from src.core.config import settings
 from src.models.cv import CV
 from src.models.user import User
+from test.fakes import random_signing_secret
 
 USER = "user_2N6W4u3"
 
@@ -52,7 +53,7 @@ async def test_wrong_secret_is_rejected(client, db):
     await seed_user_with_cv(db)
     body, headers = signed(
         {"type": "user.deleted", "data": {"id": USER}},
-        secret="whsec_c2VjcmV0X3RoYXRfaXNfbm90X291cnM=",
+        secret=random_signing_secret(),
     )
 
     response = await client.post("/api/v1/webhooks/clerk", content=body, headers=headers)
