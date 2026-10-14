@@ -1,14 +1,14 @@
 # Runtime dependencies. Development and test tools live in requirements-dev.txt
-fastapi==0.142.2
+fastapi==0.143.0
 uvicorn==0.54.0
-sqlalchemy[asyncio]==2.1.3
-asyncpg==0.31.0
+sqlalchemy[asyncio]==2.1.4
+asyncpg==0.32.0
 alembic==1.20.0
 pydantic-settings==2.15.0
 PyJWT[crypto]==2.15.1
-svix==2.6.1
+svix==2.8.0
 stripe==16.0.0
-openai==3.24.0
+openai==3.28.0
 # Used by the OpenAI SDK (and the tests). Pinned because SDK and httpx versions must match.
 httpx==0.28.1
 # Error reporting; inactive unless SENTRY_DSN is set
